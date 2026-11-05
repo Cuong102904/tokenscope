@@ -1,0 +1,60 @@
+source = "Claude API list prices (spec section 6)"
+date = "2026-11-05"
+
+# $ per 1M tokens. Keys are model-name prefixes; the longest match wins.
+[models."claude-fable-5-1"]
+input = 10
+output = 50
+cache_read = 0.25
+[models."claude-mythos-5-1"]
+input = 10
+output = 50
+cache_read = 0.25
+[models."claude-fable-5"]
+input = 10
+output = 50
+cache_read = 1.00
+[models."claude-mythos-5"]
+input = 10
+output = 50
+cache_read = 1.00
+[models."claude-opus-5-5"]
+input = 4
+output = 20
+cache_read = 0.20
+[models."claude-opus-5"]
+input = 5
+output = 25
+cache_read = 0.50
+[models."claude-opus-4-8"]
+input = 5
+output = 25
+cache_read = 0.50
+[models."claude-opus-4-7"]
+input = 5
+output = 25
+cache_read = 0.50
+[models."claude-opus-4-6"]
+input = 5
+output = 25
+cache_read = 0.50
+[models."claude-sonnet-5-5"]
+input = 2
+output = 10
+cache_read = 0.20
+[models."claude-sonnet-5"]
+input = 2
+output = 10
+cache_read = 0.20
+[models."claude-sonnet-4-6"]
+input = 3
+output = 15
+cache_read = 0.30
+[models."claude-haiku-5-5"]
+input = 0.10
+output = 0.50
+cache_read = 0.01
+[models."claude-haiku-4-5"]
+input = 1
+output = 5
+cache_read = 0.10
