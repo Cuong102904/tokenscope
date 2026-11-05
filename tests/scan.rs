@@ -40,7 +40,7 @@ fn unchanged_file_not_returned_twice() {
     std::fs::write(&p, "{}\n").unwrap();
     std::fs::write(root.join("other.txt"), "x").unwrap();
     let got = scan::changed_files(&c, &root, "jsonl").unwrap();
-    assert_eq!(got, vec![p.clone()]);
+    assert_eq!(got.iter().map(|s| s.path.clone()).collect::<Vec<_>>(), vec![p.clone()]);
     // not marked done inside changed_files
     assert_eq!(scan::changed_files(&c, &root, "jsonl").unwrap().len(), 1);
     scan::mark_done(&c, &got).unwrap();
@@ -63,5 +63,20 @@ fn forbidden_file_is_skipped() {
     std::fs::write(d.path().join("oauth.json"), "{}").unwrap();
     std::fs::write(d.path().join("ok.json"), "{}").unwrap();
     let got = scan::changed_files(&c, d.path(), "json").unwrap();
-    assert_eq!(got, vec![d.path().join("ok.json")]);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].path, d.path().join("ok.json"));
+}
+
+#[test]
+fn append_after_scan_is_not_lost() {
+    let d = tempfile::tempdir().unwrap();
+    let c = conn(d.path());
+    let p = d.path().join("s.jsonl");
+    std::fs::write(&p, "{}\n").unwrap();
+    let stamps = scan::changed_files(&c, d.path(), "jsonl").unwrap();
+    assert_eq!(stamps.len(), 1);
+    let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    f.write_all(b"{}\n").unwrap();
+    scan::mark_done(&c, &stamps).unwrap();
+    assert_eq!(scan::changed_files(&c, d.path(), "jsonl").unwrap().len(), 1);
 }

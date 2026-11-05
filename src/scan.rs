@@ -7,6 +7,15 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
+/// Stat taken during the scan; `mark_done` stores exactly this (no re-stat).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStamp {
+    pub path: PathBuf,
+    pub size: u64,
+    /// nanoseconds since the Unix epoch
+    pub mtime: i64,
+}
+
 /// (size, mtime in nanoseconds since epoch) of an already-opened file.
 fn stat(f: &std::fs::File) -> Result<(i64, i64)> {
     let m = f.metadata()?;
@@ -21,7 +30,7 @@ fn stat(f: &std::fs::File) -> Result<(i64, i64)> {
 /// Files under `root` with extension `ext` whose (size, mtime) differ from the
 /// `files` table. Never-read files and unreadable files are skipped. Does NOT
 /// record anything; call `mark_done` after the data was written successfully.
-pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<PathBuf>> {
+pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<FileStamp>> {
     if !root.exists() {
         return Ok(vec![]);
     }
@@ -41,23 +50,20 @@ pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<Pa
             )
             .optional()?;
         if known != Some((size, mtime)) {
-            out.push(p.to_path_buf());
+            out.push(FileStamp { path: p.to_path_buf(), size: size as u64, mtime });
         }
     }
     Ok(out)
 }
 
-/// Record the current (size, mtime) of each path. Files that vanished or are
-/// forbidden are ignored.
-pub fn mark_done(conn: &Connection, paths: &[PathBuf]) -> Result<()> {
+/// Record the stamps taken by `changed_files`. Call after a successful write.
+pub fn mark_done(conn: &Connection, stamps: &[FileStamp]) -> Result<()> {
     let mut st = conn.prepare(
         "INSERT INTO files(path,size,mtime) VALUES(?1,?2,?3)
          ON CONFLICT(path) DO UPDATE SET size=excluded.size, mtime=excluded.mtime",
     )?;
-    for p in paths {
-        let Ok(f) = open_guarded(p) else { continue };
-        let Ok((size, mtime)) = stat(&f) else { continue };
-        st.execute(params![p.to_string_lossy(), size, mtime])?;
+    for s in stamps {
+        st.execute(params![s.path.to_string_lossy(), s.size as i64, s.mtime])?;
     }
     Ok(())
 }
