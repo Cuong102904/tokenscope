@@ -44,10 +44,16 @@ fn kill_group(child: &mut Child) {
 }
 
 /// Run `cmd` with `input` on stdin; return its stdout, or "" on timeout/error.
-fn run_wrapped(mut cmd: Command, input: &[u8]) -> Vec<u8> {
+fn run_wrapped(cmd: Command, input: &[u8]) -> Vec<u8> {
+    run_with_timeout(cmd, input, WRAP_TIMEOUT).unwrap_or_default()
+}
+
+/// Run `cmd` (in its own process group) with `input` on stdin within `timeout`.
+/// Returns its stdout, or `None` if it could not be spawned or had to be killed.
+pub(crate) fn run_with_timeout(mut cmd: Command, input: &[u8], timeout: Duration) -> Option<Vec<u8>> {
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
-    let Ok(mut child) = cmd.spawn() else { return vec![] };
-    let deadline = Instant::now() + WRAP_TIMEOUT;
+    let mut child = cmd.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
     if let Some(mut si) = child.stdin.take() {
         let data = input.to_vec();
         // separate thread: a child that never reads stdin must not block us
@@ -75,9 +81,9 @@ fn run_wrapped(mut cmd: Command, input: &[u8]) -> Vec<u8> {
     }
     if !exited {
         kill_group(&mut child);
-        return vec![];
+        return None;
     }
-    out.unwrap_or_default()
+    Some(out.unwrap_or_default())
 }
 
 fn write_snapshot(paths: &Paths, account: &str, five: Option<Window>, seven: Option<Window>) -> anyhow::Result<()> {
