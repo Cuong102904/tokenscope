@@ -1,4 +1,4 @@
-use crate::adapters::{Adapter, CollectCtx, claude::ClaudeAdapter};
+use crate::adapters::{Adapter, CollectCtx, claude::ClaudeAdapter, claude_snapshots::ClaudeSnapshotsAdapter};
 use crate::config::Config;
 use crate::db;
 use crate::model::Vendor;
@@ -22,7 +22,7 @@ pub struct AdapterStatus {
 
 /// The single registration point for adapters; later tasks append here.
 pub fn default_adapters() -> Vec<Box<dyn Adapter>> {
-    vec![Box::new(ClaudeAdapter)]
+    vec![Box::new(ClaudeAdapter), Box::new(ClaudeSnapshotsAdapter)]
 }
 
 fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
@@ -39,10 +39,10 @@ fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter,
     if !disc.found {
         return Ok(());
     }
-    let (batch, done, unreadable) = {
-        let mut ctx = CollectCtx { conn, paths, config: cfg, done_files: vec![], unreadable: 0 };
+    let (batch, done, unreadable, remove) = {
+        let mut ctx = CollectCtx { conn, paths, config: cfg, done_files: vec![], unreadable: 0, remove_after_write: vec![] };
         let batch = ad.collect(&mut ctx)?;
-        (batch, std::mem::take(&mut ctx.done_files), ctx.unreadable)
+        (batch, std::mem::take(&mut ctx.done_files), ctx.unreadable, std::mem::take(&mut ctx.remove_after_write))
     };
     if unreadable > 0 {
         st.detail = format!("{}, {unreadable} unreadable", st.detail);
@@ -51,6 +51,9 @@ fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter,
     st.records = batch.usage.len();
     // only after the data is safely written
     scan::mark_done(conn, &done)?;
+    for p in remove {
+        let _ = std::fs::remove_file(p);
+    }
     Ok(())
 }
 
@@ -71,6 +74,10 @@ pub fn run_all(conn: &mut Connection, paths: &Paths, cfg: &Config, adapters: &[B
             Ok(Ok(())) => {}
             Ok(Err(e)) => st.error = Some(format!("{e:#}")),
             Err(p) => st.error = Some(format!("panic: {}", panic_message(p))),
+        }
+        if ad.is_auxiliary() {
+            out.push(st);
+            continue;
         }
         if let Ok(json) = serde_json::to_string(&st) {
             let _ = conn.execute(

@@ -3,6 +3,7 @@ use agent_usage::config::Config;
 use agent_usage::model::Vendor;
 use agent_usage::paths::Paths;
 use agent_usage::pricing::PriceTable;
+use agent_usage::statusline;
 use agent_usage::query::{Filter, cost};
 use agent_usage::db;
 use clap::{Parser, Subcommand};
@@ -27,8 +28,24 @@ enum Cmd {
     Serve,
     /// Terminal UI
     Tui,
-    /// Status line output
-    Statusline,
+    /// Claude Code status line wrapper (reads Claude's JSON on stdin)
+    Statusline {
+        /// Shell command whose output is printed first (your old status line)
+        #[arg(long)]
+        wrap: Option<String>,
+        /// Like --wrap, but runs `sh <path>`
+        #[arg(long, conflicts_with = "wrap")]
+        wrap_file: Option<std::path::PathBuf>,
+        /// Append `5h 44% · tuần 54% · $12.00 hôm nay` on its own line
+        #[arg(long)]
+        show: bool,
+        /// Account name for the snapshot (default: $AGENT_USAGE_ACCOUNT, then config)
+        #[arg(long)]
+        account: Option<String>,
+        /// Print the settings.json snippet to paste (never writes settings.json)
+        #[arg(long)]
+        print_snippet: bool,
+    },
     /// One-shot status summary
     Status {
         #[arg(long)]
@@ -54,6 +71,12 @@ fn money(c: f64) -> String {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Cmd::Statusline { wrap, wrap_file, show, account, print_snippet } = cli.cmd {
+        // never fails: the status line must always print something and exit 0
+        let args = statusline::Args { wrap, wrap_file, show, account, print_snippet };
+        statusline::run(&args, Paths::from_env().ok().as_ref());
+        return Ok(());
+    }
     let paths = Paths::from_env()?;
     match cli.cmd {
         Cmd::Collect { bench } => {
@@ -123,7 +146,7 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Serve => todo!("serve"),
         Cmd::Tui => todo!("tui"),
-        Cmd::Statusline => todo!("statusline"),
+        Cmd::Statusline { .. } => unreachable!("handled above"),
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod claude_snapshots;
 
 use crate::config::Config;
 use crate::model::{Batch, Vendor};
@@ -20,10 +21,17 @@ pub struct CollectCtx<'a> {
     pub done_files: Vec<FileStamp>,
     /// Files the adapter found but could not read; surfaced in the adapter's status detail.
     pub unreadable: usize,
+    /// Our own files the collector deletes once the batch is safely written.
+    pub remove_after_write: Vec<std::path::PathBuf>,
 }
 
 pub trait Adapter {
     fn vendor(&self) -> Vendor;
     fn discover(&self, paths: &Paths) -> Discovery;
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch>;
+    /// Auxiliary adapters add data for a vendor another adapter already reports on;
+    /// their status is not persisted (it would overwrite the main adapter's).
+    fn is_auxiliary(&self) -> bool {
+        false
+    }
 }

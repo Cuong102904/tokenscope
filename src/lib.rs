@@ -8,3 +8,4 @@ pub mod pricing;
 pub mod query;
 pub mod safety;
 pub mod scan;
+pub mod statusline;

@@ -28,7 +28,7 @@ fn claude_fixture() {
     assert!(disc.found);
     assert_eq!(disc.detail, "2 jsonl files");
 
-    let mut ctx = CollectCtx { conn: &conn, paths: &paths, config: &cfg, done_files: vec![], unreadable: 0 };
+    let mut ctx = CollectCtx { conn: &conn, paths: &paths, config: &cfg, done_files: vec![], unreadable: 0, remove_after_write: vec![] };
     let batch = ad.collect(&mut ctx).unwrap();
     let done = std::mem::take(&mut ctx.done_files);
     assert_eq!(done.len(), 2);
@@ -59,7 +59,7 @@ fn claude_fixture() {
     assert_eq!((w5, w1), (20, 10));
 
     // second scan: nothing changed
-    let mut ctx = CollectCtx { conn: &conn, paths: &paths, config: &cfg, done_files: vec![], unreadable: 0 };
+    let mut ctx = CollectCtx { conn: &conn, paths: &paths, config: &cfg, done_files: vec![], unreadable: 0, remove_after_write: vec![] };
     let b2 = ad.collect(&mut ctx).unwrap();
     assert!(b2.usage.is_empty() && ctx.done_files.is_empty());
 }
