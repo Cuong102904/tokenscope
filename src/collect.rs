@@ -157,3 +157,130 @@ pub fn load_status(conn: &Connection, vendor: Vendor) -> Option<AdapterStatus> {
         .ok()?;
     serde_json::from_str(&v).ok()
 }
+
+/// Result of one [`Collector::tick`].
+#[derive(Debug)]
+pub enum Tick {
+    /// `run_all` completed (individual adapters may still have failed).
+    Collected(Vec<AdapterStatus>),
+    /// The DB could not be opened; retried on the next tick.
+    OpenFailed(String),
+    /// `run_all` panicked; the connection is dropped and reopened next tick.
+    Panicked(String),
+}
+
+impl Tick {
+    pub fn ok(&self) -> bool {
+        matches!(self, Tick::Collected(_))
+    }
+}
+
+/// Background collection shared by `serve`, `tui` and `collect --watch`. [`Collector::tick`]
+/// never panics and never gives up: a failed DB open is retried on the next tick, and a panic
+/// inside `run_all` drops the connection so the next tick starts fresh. Persistent problems are
+/// logged once per streak into [`Collector::take_log`] (the caller decides where lines go).
+pub struct Collector {
+    paths: Paths,
+    cfg: Config,
+    adapters: Vec<Box<dyn Adapter>>,
+    conn: Option<Connection>,
+    open_failing: bool,
+    panicking: bool,
+    /// Per adapter index: did its last run end with an error?
+    failing: Vec<bool>,
+    log: Vec<String>,
+}
+
+impl Collector {
+    pub fn new(paths: Paths, cfg: Config) -> Collector {
+        Collector::with_adapters(paths, cfg, default_adapters())
+    }
+
+    pub fn with_adapters(paths: Paths, cfg: Config, adapters: Vec<Box<dyn Adapter>>) -> Collector {
+        Collector {
+            failing: vec![false; adapters.len()],
+            paths,
+            cfg,
+            adapters,
+            conn: None,
+            open_failing: false,
+            panicking: false,
+            log: vec![],
+        }
+    }
+
+    /// The open connection (e.g. for `agy::refresh` after a tick), if any.
+    pub fn conn_mut(&mut self) -> Option<&mut Connection> {
+        self.conn.as_mut()
+    }
+
+    /// Lines logged since the last call: the start of a failure streak and the recovery.
+    pub fn take_log(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.log)
+    }
+
+    /// One collection pass.
+    pub fn tick(&mut self) -> Tick {
+        if self.conn.is_none() {
+            match db::open(&self.paths.db()) {
+                Ok(c) => {
+                    if self.open_failing {
+                        self.log.push("database open again".into());
+                    }
+                    self.conn = Some(c);
+                    self.open_failing = false;
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    if !self.open_failing {
+                        self.log
+                            .push(format!("cannot open database (will retry): {msg}"));
+                    }
+                    self.open_failing = true;
+                    return Tick::OpenFailed(msg);
+                }
+            }
+        }
+        let Some(conn) = self.conn.as_mut() else {
+            return Tick::OpenFailed("no connection".into());
+        };
+        let (paths, cfg, adapters) = (&self.paths, &self.cfg, &self.adapters);
+        match catch_unwind(AssertUnwindSafe(|| run_all(conn, paths, cfg, adapters))) {
+            Ok(statuses) => {
+                if self.panicking {
+                    self.log.push("collection works again".into());
+                }
+                self.panicking = false;
+                for (i, s) in statuses.iter().enumerate() {
+                    let was = std::mem::replace(&mut self.failing[i], s.error.is_some());
+                    match (&s.error, was) {
+                        (Some(e), false) => self.log.push(format!("{}: {e}", s.vendor.as_str())),
+                        (None, true) => self.log.push(format!("{}: ok again", s.vendor.as_str())),
+                        _ => {}
+                    }
+                }
+                Tick::Collected(statuses)
+            }
+            Err(p) => {
+                let msg = panic_message(p);
+                if !self.panicking {
+                    self.log.push(format!(
+                        "panic during collection ({msg}); reconnecting next time"
+                    ));
+                }
+                self.panicking = true;
+                self.conn = None;
+                Tick::Panicked(msg)
+            }
+        }
+    }
+
+    /// `tick` and print the new log lines to stderr with `prefix`.
+    pub fn tick_logged(&mut self, prefix: &str) -> Tick {
+        let t = self.tick();
+        for line in self.take_log() {
+            eprintln!("{prefix}: {line}");
+        }
+        t
+    }
+}

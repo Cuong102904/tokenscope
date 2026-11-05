@@ -4,7 +4,7 @@
 //! `TestBackend`) and [`run`] (terminal + event loop + background collector).
 
 use crate::adapters::agy;
-use crate::collect;
+use crate::collect::{self, Tick};
 use crate::config::Config;
 use crate::db;
 use crate::paths::Paths;
@@ -328,43 +328,45 @@ fn agy_note(r: anyhow::Result<agy::RefreshOutcome>) -> String {
     }
 }
 
-/// Collector thread: own connection and adapters (not Send), collects every
-/// `refresh_seconds` and on demand; reports a status line per pass. Returns why it stopped.
+/// Collector thread: a shared [`collect::Collector`] (own connection and adapters, not Send;
+/// a failed DB open is retried every pass), collects every `refresh_seconds` and on demand;
+/// reports a status line per pass. Returns why it stopped.
 fn worker_body(
     paths: Paths,
     cfg: Config,
     rx: mpsc::Receiver<Cmd>,
     tx: mpsc::Sender<Msg>,
 ) -> String {
-    let adapters = collect::default_adapters();
-    let mut conn = match db::open(&paths.db()) {
-        Ok(c) => c,
-        Err(e) => return format!("không mở được DB: {e:#}"),
-    };
+    let mut col = collect::Collector::new(paths.clone(), cfg.clone());
     let every = Duration::from_secs(cfg.refresh_seconds.max(1));
     let mut want = Some(false);
     loop {
         if let Some(with_agy) = want.take() {
-            let out = catch_unwind(AssertUnwindSafe(|| {
-                let statuses = collect::run_all(&mut conn, &paths, &cfg, &adapters);
-                let mut note = match statuses
+            let mut note = match col.tick() {
+                Tick::Collected(statuses) => match statuses
                     .iter()
                     .find_map(|s| s.error.as_ref().map(|e| (s.vendor, e)))
                 {
                     Some((v, e)) => format!("lỗi {}: {e}", v.as_str()),
                     None => format!("đã thu thập lúc {}", Local::now().format("%H:%M:%S")),
+                },
+                Tick::OpenFailed(e) => format!("không mở được DB (sẽ thử lại): {e}"),
+                Tick::Panicked(m) => format!("thu thập bị lỗi nội bộ (panic): {m}"),
+            };
+            // the status line replaces the stderr log here (stderr would draw over the UI)
+            col.take_log();
+            if with_agy {
+                let r = match col.conn_mut() {
+                    Some(conn) => {
+                        catch_unwind(AssertUnwindSafe(|| agy::refresh(&paths, &cfg, conn)))
+                            .unwrap_or_else(|p| {
+                                Err(anyhow::anyhow!("panic: {}", panic_message(&*p)))
+                            })
+                    }
+                    None => Err(anyhow::anyhow!("chưa mở được DB")),
                 };
-                if with_agy {
-                    note = format!(
-                        "{note} · {}",
-                        agy_note(agy::refresh(&paths, &cfg, &mut conn))
-                    );
-                }
-                note
-            }));
-            let note = out.unwrap_or_else(|p| {
-                format!("thu thập bị lỗi nội bộ (panic): {}", panic_message(&*p))
-            });
+                note = format!("{note} · {}", agy_note(r));
+            }
             if tx.send(Msg::Done(note)).is_err() {
                 return "giao diện đã đóng".into();
             }

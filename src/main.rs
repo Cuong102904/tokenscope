@@ -28,6 +28,12 @@ enum Cmd {
         /// Print timing
         #[arg(long)]
         bench: bool,
+        /// Keep running: collect again every --interval seconds (errors logged once per streak)
+        #[arg(long, conflicts_with = "bench")]
+        watch: bool,
+        /// Seconds between passes with --watch (default: refresh_seconds from config.toml)
+        #[arg(long, requires = "watch")]
+        interval: Option<u64>,
     },
     /// Serve the web dashboard on 127.0.0.1
     Serve {
@@ -151,7 +157,25 @@ fn main() -> anyhow::Result<()> {
     }
     let paths = Paths::from_env()?;
     match cli.cmd {
-        Cmd::Collect { bench } => {
+        Cmd::Collect {
+            watch: true,
+            interval,
+            ..
+        } => {
+            let cfg = Config::load(&paths)?;
+            let every =
+                std::time::Duration::from_secs(interval.unwrap_or(cfg.refresh_seconds).max(1));
+            eprintln!(
+                "collect --watch: every {}s (Ctrl-C to stop)",
+                every.as_secs()
+            );
+            let mut c = collect::Collector::new(paths, cfg);
+            loop {
+                c.tick_logged("collect");
+                std::thread::sleep(every);
+            }
+        }
+        Cmd::Collect { bench, .. } => {
             let t0 = std::time::Instant::now();
             let (_, _, statuses) = collect_once(&paths)?;
             let elapsed = t0.elapsed();

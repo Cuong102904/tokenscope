@@ -16,7 +16,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 const INDEX_HTML: &str = include_str!("../assets/web/index.html");
@@ -388,9 +387,9 @@ pub fn serve(paths: Paths, port: u16) -> anyhow::Result<()> {
         let (paths, cfg) = (paths.clone(), cfg.clone());
         std::thread::spawn(move || {
             // built on this thread: adapters are not Send
-            let mut c = Collector::new(paths, cfg);
+            let mut c = collect::Collector::new(paths, cfg);
             loop {
-                c.tick();
+                c.tick_logged("collector");
                 std::thread::sleep(every);
             }
         });
@@ -411,71 +410,4 @@ pub fn serve(paths: Paths, port: u16) -> anyhow::Result<()> {
         axum::serve(listener, router(state)).await?;
         anyhow::Ok(())
     })
-}
-
-/// Background collection state. [`Collector::tick`] never panics and never
-/// gives up: a failed DB open is retried on the next tick, and a panic inside
-/// `run_all` drops the connection so the next tick starts fresh.
-pub struct Collector {
-    paths: Paths,
-    cfg: Config,
-    adapters: Vec<Box<dyn crate::adapters::Adapter>>,
-    conn: Option<Connection>,
-    open_failing: bool,
-}
-
-impl Collector {
-    pub fn new(paths: Paths, cfg: Config) -> Collector {
-        Collector {
-            paths,
-            cfg,
-            adapters: collect::default_adapters(),
-            conn: None,
-            open_failing: false,
-        }
-    }
-
-    /// One collection pass; `true` when `run_all` completed.
-    pub fn tick(&mut self) -> bool {
-        if self.conn.is_none() {
-            match db::open(&self.paths.db()) {
-                Ok(c) => {
-                    if self.open_failing {
-                        eprintln!("collector: database open again");
-                    }
-                    self.conn = Some(c);
-                    self.open_failing = false;
-                }
-                Err(e) => {
-                    // log once per failure streak
-                    if !self.open_failing {
-                        eprintln!("collector: cannot open database (will retry): {e:#}");
-                    }
-                    self.open_failing = true;
-                    return false;
-                }
-            }
-        }
-        let Some(conn) = self.conn.as_mut() else {
-            return false;
-        };
-        let (paths, cfg, adapters) = (&self.paths, &self.cfg, &self.adapters);
-        match catch_unwind(AssertUnwindSafe(|| {
-            collect::run_all(conn, paths, cfg, adapters)
-        })) {
-            Ok(statuses) => {
-                for s in statuses {
-                    if let Some(e) = s.error {
-                        eprintln!("collector: {}: {e}", s.vendor.as_str());
-                    }
-                }
-                true
-            }
-            Err(_) => {
-                eprintln!("collector: panic during collection; reconnecting next time");
-                self.conn = None;
-                false
-            }
-        }
-    }
 }

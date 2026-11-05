@@ -366,3 +366,91 @@ fn doctor_shows_stored_totals_and_last_limit() {
         "{codex}"
     );
 }
+
+/// Fails while the flag is set.
+struct Toggle(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Adapter for Toggle {
+    fn vendor(&self) -> Vendor {
+        Vendor::Codex
+    }
+    fn discover(&self, _: &Paths) -> Discovery {
+        Discovery {
+            found: true,
+            detail: "fake".into(),
+        }
+    }
+    fn collect(&self, _: &mut CollectCtx) -> anyhow::Result<Batch> {
+        if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("bad source")
+        }
+        Ok(Batch::default())
+    }
+}
+
+#[test]
+fn collector_logs_adapter_error_once_per_streak() {
+    use agent_usage::collect::Collector;
+    use std::sync::atomic::Ordering;
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let fail = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut c = Collector::with_adapters(
+        paths,
+        Config::default(),
+        vec![Box::new(Toggle(fail.clone()))],
+    );
+    for _ in 0..3 {
+        assert!(c.tick().ok());
+    }
+    let log = c.take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(
+        log[0].contains("codex") && log[0].contains("bad source"),
+        "{log:?}"
+    );
+    fail.store(false, Ordering::SeqCst);
+    c.tick();
+    c.tick();
+    let log = c.take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(
+        log[0].contains("codex") && log[0].contains("ok again"),
+        "{log:?}"
+    );
+    fail.store(true, Ordering::SeqCst);
+    c.tick();
+    assert_eq!(c.take_log().len(), 1, "a new streak is logged again");
+}
+
+#[test]
+fn collect_watch_loops_and_logs_errors_once() {
+    let h = home();
+    let oc = h.path().join(".local/share/opencode/opencode.db");
+    std::fs::create_dir_all(oc.parent().unwrap()).unwrap();
+    std::fs::write(&oc, b"not a database at all, just text").unwrap();
+    let mut ch = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+        .args(["collect", "--watch", "--interval", "1"])
+        .env("HOME", h.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // ~2 failing ticks, then the source disappears and later ticks recover
+    std::thread::sleep(std::time::Duration::from_millis(1600));
+    std::fs::remove_file(&oc).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    let _ = ch.kill();
+    let o = ch.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    let oc_lines: Vec<_> = err.lines().filter(|l| l.contains("opencode")).collect();
+    assert_eq!(oc_lines.len(), 2, "error once, recovery once:\n{err}");
+    assert!(!oc_lines[0].contains("ok again"), "{err}");
+    assert!(oc_lines[1].ends_with("opencode: ok again"), "{err}");
+    let c = db::open(&h.path().join(".agent-usage/agent-usage.db")).unwrap();
+    let n: i64 = c
+        .query_row("SELECT count(*) FROM usage", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 3, "claude rows collected");
+}

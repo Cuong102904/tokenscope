@@ -291,11 +291,15 @@ fn collector_retries_failed_open() {
     };
     // ~/.agent-usage is a plain file: the DB cannot be created
     std::fs::write(paths.data_dir(), "x").unwrap();
-    let mut c = server::Collector::new(paths.clone(), Config::default());
-    assert!(!c.tick());
-    assert!(!c.tick());
+    let mut c = agent_usage::collect::Collector::new(paths.clone(), Config::default());
+    assert!(!c.tick().ok());
+    assert!(!c.tick().ok());
+    assert_eq!(c.take_log().len(), 1, "open failure logged once per streak");
     std::fs::remove_file(paths.data_dir()).unwrap();
-    assert!(c.tick(), "collector must recover once the DB can be opened");
+    assert!(
+        c.tick().ok(),
+        "collector must recover once the DB can be opened"
+    );
     assert!(paths.db().is_file());
 }
 
