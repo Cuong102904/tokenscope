@@ -110,3 +110,41 @@ fn status_refresh_prints_agy_lines() {
     assert!(o.status.success(), "{out}");
     assert!(out.contains("Gemini Models") && out.contains("20%"), "{out}");
 }
+
+fn stamped(conn: &rusqlite::Connection) -> bool {
+    conn.query_row("SELECT count(*) FROM kv WHERE key='agy:last_refresh'", [], |r| r.get::<_, i64>(0)).unwrap() == 1
+}
+
+#[test]
+fn refresh_junk_or_failing_output_is_error_but_stamps_throttle() {
+    for body in ["echo 'please log in me@example.com email=me@example.com'", "exit 1"] {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths { home: home.path().to_path_buf() };
+        let bin = fake_agy(home.path(), body);
+        let mut conn = db::open(&paths.db()).unwrap();
+        let e = agy::refresh_with(&paths, &Config::default(), &mut conn, &bin, 500).unwrap_err().to_string();
+        assert!(e.contains("no weekly limit lines"), "{e}");
+        assert!(!e.contains("email="), "{e}");
+        assert!(stamped(&conn));
+        let out = agy::refresh_with(&paths, &Config::default(), &mut conn, &bin, 501).unwrap();
+        assert!(matches!(out, RefreshOutcome::Throttled { .. }));
+    }
+}
+
+#[test]
+fn parse_usage_clamps_percent() {
+    let v = agy::parse_usage("G\tWeekly Limit Remaining\t120%\t2026-11-09T00:00:00Z\nH\tWeekly Limit Remaining\t-5%\t2026-11-09T00:00:00Z", 1, "");
+    assert_eq!((v[0].used_percent, v[1].used_percent), (0.0, 100.0));
+}
+
+#[test]
+fn status_refresh_json_has_agy_key() {
+    let home = tempfile::tempdir().unwrap();
+    let bindir = tempfile::tempdir().unwrap();
+    fake_agy(bindir.path(), "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT");
+    let path = format!("{}:{}", bindir.path().display(), std::env::var("PATH").unwrap());
+    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage")).args(["status", "--refresh", "--json"]).env("HOME", home.path()).env("PATH", path).output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["agy"]["snapshots"][0]["scope"], "weekly:Gemini Models");
+    assert_eq!(v["agy"]["snapshots"][0]["used_percent"], 20.0);
+}

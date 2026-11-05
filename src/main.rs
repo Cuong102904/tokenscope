@@ -72,20 +72,25 @@ fn collect_once(paths: &Paths) -> anyhow::Result<(Connection, Config, Vec<Adapte
     Ok((conn, cfg, st))
 }
 
-/// Latest agy weekly snapshot per scope, as `agy <scope>: N% used (resets <UTC>)`.
-fn print_agy(conn: &Connection, note: Option<&str>) {
-    if let Some(n) = note {
-        println!("{n}");
-    }
+/// Latest agy weekly snapshot per scope: (scope, used_percent, resets_at, measured_at).
+fn agy_rows(conn: &Connection) -> Vec<(String, f64, Option<i64>, i64)> {
     let Ok(mut st) = conn.prepare(
         "SELECT scope, used_percent, resets_at, measured_at FROM limit_snapshots l WHERE vendor='agy'
          AND measured_at=(SELECT max(measured_at) FROM limit_snapshots WHERE vendor='agy' AND scope=l.scope AND account=l.account)
          ORDER BY scope",
     ) else {
-        return;
+        return vec![];
     };
     let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?)));
-    for (scope, used, resets, at) in rows.into_iter().flatten().flatten() {
+    rows.into_iter().flatten().flatten().collect()
+}
+
+/// `agy <scope>: N% used (resets <UTC>)` lines.
+fn print_agy(conn: &Connection, note: Option<&str>) {
+    if let Some(n) = note {
+        println!("{n}");
+    }
+    for (scope, used, resets, at) in agy_rows(conn) {
         let fmt = |t: i64| chrono::DateTime::from_timestamp(t, 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
         println!("agy {scope}: {used:.0}% used (resets {}, measured {})", resets.map(fmt).unwrap_or_else(|| "?".into()), fmt(at));
     }
@@ -150,6 +155,14 @@ fn main() -> anyhow::Result<()> {
                     "today": today, "days7": d7, "days30": d30, "all_time": all,
                     "disclaimer": DISCLAIMER,
                 });
+                let mut v = v;
+                if refresh {
+                    let snaps: Vec<_> = agy_rows(&conn)
+                        .into_iter()
+                        .map(|(scope, used, resets, at)| serde_json::json!({"scope": scope, "used_percent": used, "resets_at": resets, "measured_at": at}))
+                        .collect();
+                    v["agy"] = serde_json::json!({"snapshots": snaps, "note": agy_note});
+                }
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 println!("hôm nay {} · 7 ngày {} · 30 ngày {}", money(today.cost), money(d7.cost), money(d30.cost));

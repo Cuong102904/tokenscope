@@ -69,7 +69,7 @@ pub fn parse_usage(text: &str, measured_at: i64, account: &str) -> Vec<LimitSnap
                 account: account.to_string(),
                 scope: format!("weekly:{group}"),
                 window_minutes: Some(10080),
-                used_percent: 100.0 - remaining,
+                used_percent: (100.0 - remaining).clamp(0.0, 100.0),
                 resets_at: Some(resets_at),
                 plan_type: None,
                 measured_at,
@@ -131,7 +131,13 @@ pub fn refresh_with_timeout(paths: &Paths, _cfg: &Config, conn: &mut Connection,
     let mut cmd = Command::new(&bin);
     cmd.args(["-p", "/usage"]);
     let out = crate::statusline::run_with_timeout(cmd, b"", timeout).ok_or_else(|| anyhow::anyhow!("agy /usage failed to start or timed out after {}s", timeout.as_secs()))?;
-    let snaps = parse_usage(&String::from_utf8_lossy(&out), now, &account_hint(&paths.agy_log_dir()));
+    let text = String::from_utf8_lossy(&out);
+    let snaps = parse_usage(&text, now, &account_hint(&paths.agy_log_dir()));
+    if snaps.is_empty() {
+        let head: String = text.chars().take(200).collect();
+        let head = if head.contains("email=") { String::new() } else { head };
+        anyhow::bail!("agy /usage produced no weekly limit lines: {}", head.trim());
+    }
     crate::db::write_batch(conn, &Batch { limits: snaps, ..Default::default() })?;
     Ok(RefreshOutcome::Ran)
 }
