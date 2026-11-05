@@ -138,3 +138,59 @@ fn open_checks_user_version() {
     drop(c);
     assert!(agent_usage::db::open(&proto).is_err());
 }
+
+fn sess(title: Option<&str>, project: &str, src: &str, lw: i64) -> agent_usage::model::SessionInfo {
+    agent_usage::model::SessionInfo {
+        vendor: Vendor::OpenCode,
+        session_id: "s1".into(),
+        project: project.into(),
+        title: title.map(String::from),
+        source_path: src.into(),
+        last_write: lw,
+    }
+}
+
+#[test]
+fn sessions_upsert_keeps_non_empty_values() {
+    let d = tempfile::tempdir().unwrap();
+    let mut c = db::open(&d.path().join("t.db")).unwrap();
+    let write = |c: &mut rusqlite::Connection, s| {
+        db::write_batch(
+            c,
+            &Batch {
+                sessions: vec![s],
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let get = |c: &rusqlite::Connection| -> (Option<String>, String, String, i64) {
+        c.query_row(
+            "SELECT title,project,source_path,last_write FROM sessions WHERE session_id='s1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    };
+    write(&mut c, sess(Some("Old title"), "/p/old", "/src/old", 200));
+    write(&mut c, sess(None, "", "", 100));
+    assert_eq!(
+        get(&c),
+        (
+            Some("Old title".into()),
+            "/p/old".into(),
+            "/src/old".into(),
+            200
+        )
+    );
+    write(&mut c, sess(Some("New title"), "/p/new", "/src/new", 150));
+    assert_eq!(
+        get(&c),
+        (
+            Some("New title".into()),
+            "/p/new".into(),
+            "/src/new".into(),
+            200
+        )
+    );
+}

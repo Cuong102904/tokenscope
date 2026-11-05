@@ -45,7 +45,8 @@ fn n(v: &Value) -> u64 {
     v.as_u64().unwrap_or(0)
 }
 
-/// `data` JSON of an assistant message -> usage record; `None` for rows without model or tokens.
+/// `data` JSON of an assistant message -> usage record; `None` for non-assistant rows and rows
+/// without tokens. A missing `modelID` is recorded as model `unknown` (unpriced, shows n/a).
 fn parse_message(
     id: &str,
     session_id: &str,
@@ -55,7 +56,10 @@ fn parse_message(
     if data["role"].as_str() != Some("assistant") {
         return None;
     }
-    let model = data["modelID"].as_str().filter(|m| !m.is_empty())?;
+    let model = data["modelID"]
+        .as_str()
+        .filter(|m| !m.is_empty())
+        .unwrap_or("unknown");
     let t = data.get("tokens").filter(|t| t.is_object())?;
     let (input, output, reasoning) = (n(&t["input"]), n(&t["output"]), n(&t["reasoning"]));
     let (cache_read, cache_write) = (n(&t["cache"]["read"]), n(&t["cache"]["write"]));
@@ -85,8 +89,10 @@ fn parse_message(
 }
 
 /// Read every assistant message with `last < time_updated <= max` (max is sampled first so the
-/// window is closed even if OpenCode writes concurrently).
-pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<Batch> {
+/// window is closed even if OpenCode writes concurrently). The role is checked in Rust, not with
+/// `json_extract` in SQL: one row with invalid JSON would fail the whole statement and the
+/// watermark would never advance. Returns the batch and the number of rows whose `data` is not JSON.
+pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<(Batch, usize)> {
     let conn = open_ro(db_path)?;
     let max: Option<i64> = conn.query_row(
         "SELECT max(time_updated) FROM message WHERE time_updated > ?1",
@@ -94,20 +100,22 @@ pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<Batch> {
         |r| r.get(0),
     )?;
     let Some(max) = max else {
-        return Ok(Batch::default());
+        return Ok((Batch::default(), 0));
     };
     let mut batch = Batch::default();
+    let mut malformed = 0;
     let mut touched = BTreeSet::new();
     let mut st = conn.prepare(
         "SELECT id, session_id, time_created, data FROM message
-         WHERE time_updated > ?1 AND time_updated <= ?2 AND json_extract(data,'$.role')='assistant'
+         WHERE time_updated > ?1 AND time_updated <= ?2
          ORDER BY time_updated, id",
     )?;
     let mut rows = st.query(params![last, max])?;
     while let Some(r) = rows.next()? {
-        let (id, sid, created, data): (String, String, i64, String) =
+        let (id, sid, created, data): (String, String, i64, Option<String>) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
-        let Ok(v) = serde_json::from_str::<Value>(&data) else {
+        let Some(v) = data.and_then(|d| serde_json::from_str::<Value>(&d).ok()) else {
+            malformed += 1;
             continue;
         };
         if let Some(rec) = parse_message(&id, &sid, created, &v) {
@@ -149,7 +157,7 @@ pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<Batch> {
         });
     }
     batch.kv.push((KV_WATERMARK.to_string(), max.to_string()));
-    Ok(batch)
+    Ok((batch, malformed))
 }
 
 impl Adapter for OpenCodeAdapter {
@@ -179,6 +187,8 @@ impl Adapter for OpenCodeAdapter {
             .optional()?
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        read_batch(&ctx.paths.opencode_db(), last)
+        let (batch, malformed) = read_batch(&ctx.paths.opencode_db(), last)?;
+        ctx.unreadable += malformed;
+        Ok(batch)
     }
 }

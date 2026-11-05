@@ -147,8 +147,11 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
         }
         let mut ss = tx.prepare(
             "INSERT INTO sessions(vendor,session_id,project,title,source_path,last_write) VALUES(?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(vendor,session_id) DO UPDATE SET project=excluded.project, title=excluded.title,
-               source_path=excluded.source_path, last_write=max(coalesce(sessions.last_write,0), coalesce(excluded.last_write,0))",
+             ON CONFLICT(vendor,session_id) DO UPDATE SET
+               project=COALESCE(NULLIF(excluded.project,''), sessions.project),
+               title=COALESCE(excluded.title, sessions.title),
+               source_path=COALESCE(NULLIF(excluded.source_path,''), sessions.source_path),
+               last_write=max(coalesce(sessions.last_write,0), coalesce(excluded.last_write,0))",
         )?;
         for r in &b.sessions {
             ss.execute(params![

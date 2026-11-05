@@ -173,3 +173,62 @@ fn locked_or_missing_db_is_unavailable_not_panic() {
     let st = collect::run_all(&mut e.conn, &e.paths, &cfg, &[Box::new(OpenCodeAdapter)]);
     assert!(st[0].error.is_some());
 }
+
+fn watermark(e: &Env) -> String {
+    e.conn
+        .query_row(
+            "SELECT value FROM kv WHERE key='opencode:max_time_updated'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn malformed_json_row_does_not_stall_watermark() {
+    let mut e = setup();
+    // invalid JSON in the middle of the window, then a good row after it
+    e.oc.execute(
+        "INSERT INTO message VALUES('msg_bad','ses_1',1700000004000,1700000065000,'{\"role\":\"assistant\",broken')",
+        [],
+    )
+    .unwrap();
+    e.oc.execute(
+        "INSERT INTO message VALUES('msg_a5','ses_1',1700000005000,1700000090000,
+         '{\"role\":\"assistant\",\"modelID\":\"gpt-test\",\"tokens\":{\"input\":5,\"output\":1,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"time\":{\"created\":1700000005000}}')",
+        [],
+    )
+    .unwrap();
+    let cfg = Config::default();
+    let st = collect::run_all(&mut e.conn, &e.paths, &cfg, &[Box::new(OpenCodeAdapter)]);
+    assert!(st[0].error.is_none(), "{:?}", st[0].error);
+    assert_eq!(st[0].records, 3, "good rows around the bad one land");
+    assert!(st[0].detail.contains("1 unreadable"), "{}", st[0].detail);
+    assert_eq!(count(&e), 3);
+    assert_eq!(
+        watermark(&e),
+        "1700000090000",
+        "watermark moves past the bad row"
+    );
+}
+
+#[test]
+fn assistant_without_model_is_recorded_as_unknown() {
+    let mut e = setup();
+    e.oc.execute(
+        "INSERT INTO message VALUES('msg_nm','ses_1',1700000006000,1700000095000,
+         '{\"role\":\"assistant\",\"tokens\":{\"input\":7,\"output\":3,\"reasoning\":0,\"cache\":{\"write\":0,\"read\":0}},\"time\":{\"created\":1700000006000}}')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(run(&mut e), 3);
+    let m: String = e
+        .conn
+        .query_row(
+            "SELECT model FROM usage WHERE msg_key='opencode:msg_nm'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(m, "unknown");
+}
