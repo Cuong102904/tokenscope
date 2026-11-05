@@ -9,3 +9,4 @@ pub mod query;
 pub mod safety;
 pub mod scan;
 pub mod statusline;
+pub mod server;

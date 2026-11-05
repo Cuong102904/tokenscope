@@ -3,7 +3,7 @@ use agent_usage::config::Config;
 use agent_usage::model::Vendor;
 use agent_usage::paths::Paths;
 use agent_usage::pricing::PriceTable;
-use agent_usage::statusline;
+use agent_usage::{server, statusline};
 use agent_usage::query::{Filter, cost};
 use agent_usage::db;
 use clap::{Parser, Subcommand};
@@ -25,7 +25,10 @@ enum Cmd {
         bench: bool,
     },
     /// Serve the web dashboard on 127.0.0.1
-    Serve,
+    Serve {
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+    },
     /// Terminal UI
     Tui,
     /// Claude Code status line wrapper (reads Claude's JSON on stdin)
@@ -153,7 +156,7 @@ fn main() -> anyhow::Result<()> {
                 );
             }
         }
-        Cmd::Serve => todo!("serve"),
+        Cmd::Serve { port } => server::serve(paths, port)?,
         Cmd::Tui => todo!("tui"),
         Cmd::Statusline { .. } => unreachable!("handled above"),
     }
