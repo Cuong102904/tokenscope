@@ -162,7 +162,23 @@
           <div class="chart short"><canvas id="cLimit" role="img" aria-label="Phần trăm hạn mức đã dùng theo thời gian, vạch đứt là lúc reset"></canvas></div></div></section>
       <section class="card" data-sec="lim-events"><h2>Các lần chạm giới hạn <span class="t">30 ngày</span></h2><div class="body scroll"><table id="tLimEvents"></table></div></section>
     </div>
-    <div data-pane="skills" hidden><div class="card soon">Skill &amp; công cụ — sắp có.</div></div>
+    <div data-pane="skills" hidden>
+      <p class="note">Bộ lọc model/project chỉ áp lên chi phí; số lần gọi/đọc và công cụ chỉ lọc theo ngày, hãng, và (với model/project) theo session có dữ liệu khớp.</p>
+      <div class="grid">
+        <section class="card" data-sec="sk-cost"><h2>Top 15 skill theo chi phí <span class="t">Claude</span></h2>
+          <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkCost"><canvas id="cSkCost" role="img" aria-label="Top 15 skill theo chi phí"></canvas></div>
+            <p class="note">Đo bằng cách nào: tổng giá các tin nhắn Claude được gắn nhãn attributionSkill, tức tin nhắn tạo ra trong lúc skill hoạt động.</p></div></section>
+        <section class="card" data-sec="sk-plugin"><h2>Chi phí theo plugin <span class="t">Claude</span></h2>
+          <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkPlugin"><canvas id="cSkPlugin" role="img" aria-label="Chi phí theo plugin"></canvas></div>
+            <p class="note">Đo bằng cách nào: cùng các tin nhắn như biểu đồ bên cạnh, gom theo attributionPlugin.</p></div></section>
+      </div>
+      <section class="card" data-sec="sk-count"><h2>Số lần gọi / đọc skill</h2>
+        <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkCount"><canvas id="cSkCount" role="img" aria-label="Số lần gọi hoặc đọc theo skill, tách theo hãng"></canvas></div>
+          <p class="note">Đo bằng cách nào: Claude đếm lần gọi công cụ Skill. Codex: đếm số lần đọc SKILL.md — xếp hạng tương đối.</p></div></section>
+      <section class="card" data-sec="sk-tools"><h2>Top 20 công cụ <span class="t">số lần gọi</span></h2>
+        <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkTools"><canvas id="cSkTools" role="img" aria-label="Top 20 công cụ theo số lần gọi"></canvas></div>
+          <p class="note">Đo bằng cách nào: số lần gọi công cụ (Claude tool_use, Codex function_call / custom_tool_call). Màu theo hãng.</p></div></section>
+    </div>
     <div data-pane="active" hidden><div class="card soon">Đang chạy — sắp có.</div></div>
   </main>
 </div>

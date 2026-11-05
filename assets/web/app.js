@@ -445,6 +445,80 @@ async function renderSessions() {
   await renderTimeline();
 }
 
+// ---------- skills & tools ----------
+// Horizontal bar charts grow with the row count so labels never collide (30 px per row).
+const hHeight = (id, n) => { $(id).style.height = Math.max(120, n * 30 + 50) + 'px'; };
+let skSig = '';
+async function renderSkills() {
+  const d = await getJson('/api/skills?' + apiQuery());
+  const c = chartBase();
+  // 30 s auto-refresh: same data and theme -> leave the charts alone (no flicker)
+  const sig = JSON.stringify([d, c.mute, c.grid, c.ink, css('--s1'), css('--s2'), css('--s3'), css('--other')]);
+  if (sig === skSig && charts.cSkCost) return;
+  skSig = sig;
+  const noAnim = charts.cSkCost ? {animation: false} : {}; // data refresh on an already drawn tab: no re-animation
+  const hbar = (id, wrap, labels, datasets, extra) => {
+    hHeight(wrap, labels.length);
+    draw(id, {type: 'bar', data: {labels, datasets},
+      options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false, ...noAnim,
+        scales: {x: {beginAtZero: true, grid: {color: c.grid}, ...(extra.x || {})}, y: {grid: {display: false}, ticks: {color: c.ink}, ...(extra.y || {})}},
+        plugins: {legend: extra.legend || {display: false}, tooltip: {callbacks: extra.tooltip}}}});
+  };
+  // no rows: hide the chart box and show the "Không có dữ liệu" line that precedes it
+  const empty = (wrap, on) => { $(wrap).hidden = !on; $(wrap).previousElementSibling.hidden = !!on; };
+
+  const top = d.by_cost.slice(0, 15);
+  empty('wSkCost', top.length);
+  if (top.length) hbar('cSkCost', 'wSkCost', top.map(s => s.skill),
+    [{label: 'Chi phí', data: top.map(s => s.priced_cost), backgroundColor: vendorColor('claude'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
+    {x: {ticks: {callback: tickMoney}}, tooltip: {
+      label: it => { const s = top[it.dataIndex]; return costText(s.cost, s.priced_cost) + ' · ' + num(s.messages) + ' tin nhắn'; },
+      afterLabel: it => top[it.dataIndex].plugin ? 'plugin: ' + top[it.dataIndex].plugin : ''}});
+  else if (charts.cSkCost) { charts.cSkCost.destroy(); delete charts.cSkCost; }
+
+  const pl = d.by_plugin.filter(p => p.priced_cost > 0);
+  empty('wSkPlugin', pl.length);
+  if (pl.length) {
+    // plugins past the 7th by cost fold into "Khác" (palette has 8 slots)
+    const shown = pl.slice(0, SLOTS - 1), rest = pl.slice(SLOTS - 1);
+    const rows = shown.map((p, i) => ({name: p.plugin, cost: p.cost, priced: p.priced_cost, color: css('--s' + (i + 1))}));
+    if (rest.length) rows.push({name: OTHER, cost: rest.some(p => p.cost == null) ? null : rest.reduce((a, p) => a + p.priced_cost, 0),
+      priced: rest.reduce((a, p) => a + p.priced_cost, 0), color: css('--other')});
+    draw('cSkPlugin', {type: 'doughnut',
+      data: {labels: rows.map(r => r.name), datasets: [{data: rows.map(r => r.priced), backgroundColor: rows.map(r => r.color), borderColor: c.surface, borderWidth: 2}]},
+      options: {responsive: true, maintainAspectRatio: false, cutout: '62%', ...noAnim,
+        plugins: {legend: {...legendCfg(c), labels: {...legendCfg(c).labels,
+          generateLabels: ch => Chart.overrides.doughnut.plugins.legend.labels.generateLabels(ch).map((l, i) => ({...l, fontColor: c.ink,
+            text: rows[i].name + ' ' + costText(rows[i].cost, rows[i].priced)}))}},
+          tooltip: {callbacks: {label: it => rows[it.dataIndex].name + ': ' + costText(rows[it.dataIndex].cost, rows[it.dataIndex].priced)}}}},
+    });
+  } else if (charts.cSkPlugin) { charts.cSkPlugin.destroy(); delete charts.cSkPlugin; }
+
+  // counts per skill, one dataset per vendor (colour follows the vendor)
+  const tot = {};
+  d.invocations.forEach(r => tot[r.skill] = (tot[r.skill] || 0) + r.count);
+  const names = Object.keys(tot).sort((a, b) => tot[b] - tot[a] || a.localeCompare(b)).slice(0, 15);
+  empty('wSkCount', names.length);
+  if (names.length) {
+    const vendors = [...new Set(d.invocations.map(r => r.vendor))].sort();
+    const cell = (v, n) => d.invocations.filter(r => r.vendor === v && r.skill === n);
+    hbar('cSkCount', 'wSkCount', names, vendors.map(v => ({label: vendorName(v), data: names.map(n => cell(v, n).reduce((a, r) => a + r.count, 0)),
+      backgroundColor: vendorColor(v), borderRadius: 2, maxBarThickness: 18})),
+      {x: {stacked: true, ticks: {precision: 0}}, y: {stacked: true}, legend: legendCfg(c), tooltip: {
+        label: it => { const v = vendors[it.datasetIndex], rs = cell(v, names[it.dataIndex]), n = rs.reduce((a, r) => a + r.count, 0), s = rs.reduce((a, r) => a + r.sessions, 0);
+          return n ? vendorName(v) + ': ' + num(n) + (v === 'codex' ? ' lần đọc' : ' lần gọi') + ' · ' + num(s) + ' session' : ''; }}});
+  } else if (charts.cSkCount) { charts.cSkCount.destroy(); delete charts.cSkCount; }
+
+  const tools = d.tools; // already top 20 by (vendor, tool); label with vendor when the same tool exists in several
+  const dup = new Set(tools.map(t => t.tool).filter((t, i, a) => a.indexOf(t) !== i));
+  const tl = t => dup.has(t.tool) ? t.tool + ' (' + vendorName(t.vendor) + ')' : t.tool;
+  empty('wSkTools', tools.length);
+  if (tools.length) hbar('cSkTools', 'wSkTools', tools.map(tl),
+    [{label: 'Số lần gọi', data: tools.map(t => t.count), backgroundColor: tools.map(t => vendorColor(t.vendor)), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
+    {x: {ticks: {precision: 0}}, tooltip: {label: it => vendorName(tools[it.dataIndex].vendor) + ': ' + num(it.parsed.x) + ' lần gọi'}});
+  else if (charts.cSkTools) { charts.cSkTools.destroy(); delete charts.cSkTools; }
+}
+
 // ---------- filters ----------
 function fillSelect(sel, values, current, label) {
   const first = sel.options[0];
@@ -464,7 +538,7 @@ async function loadMeta() {
 }
 
 // ---------- router + refresh ----------
-const RENDER = {overview: renderOverview, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions};
+const RENDER = {overview: renderOverview, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions, skills: renderSkills};
 let busy = false, dirty = false;
 function showTab() {
   const tab = currentTab();

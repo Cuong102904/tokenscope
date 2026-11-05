@@ -1,6 +1,7 @@
 pub mod cost;
 pub mod limits;
 pub mod sessions;
+pub mod skills;
 
 use chrono::{Duration, Local};
 use rusqlite::types::Value;

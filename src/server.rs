@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::db;
 use crate::paths::Paths;
 use crate::pricing::PriceTable;
-use crate::query::{Filter, cost, limits, sessions};
+use crate::query::{Filter, cost, limits, sessions, skills};
 use axum::extract::{Path, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/cost", get(cost_api))
         .route("/api/sessions", get(sessions_api))
         .route("/api/session/{vendor}/{id}/timeline", get(timeline_api))
+        .route("/api/skills", get(skills_api))
         .route("/api/meta", get(meta))
         .route("/api/limits", get(limits_api))
         .route("/api/limits/history", get(limits_history_api))
@@ -172,6 +173,21 @@ async fn sessions_api(State(st): State<AppState>, Query(p): Query<Params>) -> Ap
     let f = p.filter()?;
     let limit = p.limit.unwrap_or(200).min(5000);
     with_db(st, move |c, st| sessions::list(c, &st.prices, &st.cfg, &f, limit)).await
+}
+
+/// Cost by skill/plugin follows every filter; event counts follow days and vendor, and
+/// model/project only through sessions that have a matching usage row.
+async fn skills_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
+    let f = p.filter()?;
+    with_db(st, move |c, st| {
+        Ok(serde_json::json!({
+            "by_cost": skills::by_cost(c, &st.prices, &f)?,
+            "invocations": skills::invocations(c, &f)?,
+            "by_plugin": skills::by_plugin(c, &st.prices, &f)?,
+            "tools": skills::tools(c, &f)?,
+        }))
+    })
+    .await
 }
 
 async fn timeline_api(State(st): State<AppState>, Path((vendor, id)): Path<(String, String)>) -> ApiResult {
