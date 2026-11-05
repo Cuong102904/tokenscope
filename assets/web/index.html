@@ -67,7 +67,6 @@
   #tSess tbody tr { cursor:pointer; }
   #tSess tbody tr:hover { background:var(--bg); }
   #tSess tbody tr.sel { background:var(--bg); box-shadow:inset 3px 0 0 var(--accent); }
-  .soon { padding:40px 16px; text-align:center; color:var(--mute); }
   .empty { color:var(--mute); font-size:13px; padding:8px 0; }
   #status { color:var(--mute); font-size:12px; }
   .lim-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
@@ -180,7 +179,12 @@
         <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkTools"><canvas id="cSkTools" role="img" aria-label="Top 20 công cụ theo số lần gọi"></canvas></div>
           <p class="note">Đo bằng cách nào: số lần gọi công cụ (Claude tool_use, Codex function_call / custom_tool_call). Màu theo hãng.</p></div></section>
     </div>
-    <div data-pane="active" hidden><div class="card soon">Đang chạy — sắp có.</div></div>
+    <div data-pane="active" hidden>
+      <section class="card" data-sec="act-now"><h2>Phiên đang chạy <span class="t" id="actCount"></span></h2>
+        <div class="body scroll"><table id="tActive"></table></div></section>
+      <section class="card" data-sec="act-src"><h2>Nguồn dữ liệu</h2>
+        <div class="body scroll"><table id="tSources"></table></div></section>
+    </div>
   </main>
 </div>
 <script src="/chart.js"></script>

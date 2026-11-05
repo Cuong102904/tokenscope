@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::db;
 use crate::paths::Paths;
 use crate::pricing::PriceTable;
-use crate::query::{Filter, cost, limits, sessions, skills};
+use crate::query::{Filter, active, cost, limits, sessions, skills};
 use axum::extract::{Path, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(sessions_api))
         .route("/api/session/{vendor}/{id}/timeline", get(timeline_api))
         .route("/api/skills", get(skills_api))
+        .route("/api/active", get(active_api))
         .route("/api/meta", get(meta))
         .route("/api/limits", get(limits_api))
         .route("/api/limits/history", get(limits_history_api))
@@ -136,7 +137,7 @@ where
 }
 
 /// Fixed windows (today / 7 / 30 days); vendor, model and project filters still apply.
-/// `limits_mini` is the same card list as `/api/limits`; `active_count` is a placeholder until the active task.
+/// `limits_mini` is the same card list as `/api/limits`; `active_count` counts `/api/active` (unfiltered).
 async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
     let f = p.filter()?;
     with_db(st, move |c, st| {
@@ -145,7 +146,7 @@ async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiRes
             "totals_today": cost::totals(c, &st.prices, &w(1))?,
             "totals_7d": cost::totals(c, &st.prices, &w(7))?,
             "totals_30d": cost::totals(c, &st.prices, &w(30))?,
-            "active_count": 0,
+            "active_count": active::list(c, &st.prices, &st.cfg, chrono::Utc::now().timestamp())?.len(),
             "daily": cost::daily(c, &st.prices, &w(30))?,
             "limits_mini": limits::current(c, &st.cfg, chrono::Utc::now().timestamp())?,
         }))
@@ -185,6 +186,18 @@ async fn skills_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiR
             "invocations": skills::invocations(c, &f)?,
             "by_plugin": skills::by_plugin(c, &st.prices, &f)?,
             "tools": skills::tools(c, &f)?,
+        }))
+    })
+    .await
+}
+
+/// `{ active_minutes, sessions, sources }`; not narrowed by the filters (it is "what runs now").
+async fn active_api(State(st): State<AppState>) -> ApiResult {
+    with_db(st, |c, st| {
+        Ok(serde_json::json!({
+            "active_minutes": st.cfg.active_minutes,
+            "sessions": active::list(c, &st.prices, &st.cfg, chrono::Utc::now().timestamp())?,
+            "sources": active::sources(c),
         }))
     })
     .await

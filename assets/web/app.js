@@ -537,6 +537,28 @@ async function renderSkills() {
   else if (charts.cSkTools) { charts.cSkTools.destroy(); delete charts.cSkTools; }
 }
 
+// ---------- active sessions + sources ----------
+const agoShort = ts => { const d = Math.max(0, Math.round(nowSec() - ts)); return d < 60 ? d + ' giây trước' : dur(d) + ' trước'; };
+const th = (h, l) => `<th${l ? ' class="l"' : ''}>${esc(h)}</th>`;
+const td = (v, l) => `<td${l ? ' class="l"' : ''}>${esc(v)}</td>`;
+async function renderActive() {
+  const d = await getJson('/api/active');
+  const ss = d.sessions;
+  $('actCount').textContent = ss.length + ' phiên · tự làm mới 10 giây';
+  $('tActive').innerHTML = '<thead><tr>' + [['Hãng', 1], ['Project', 1], ['Model', 1], ['Cập nhật', 0], ['Chi phí đến giờ', 0], ['Chi phí 1 giờ qua', 0]]
+    .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +
+    (ss.length ? ss.map(s => `<tr title="${esc(s.title || s.session_id)}">` + td(vendorName(s.vendor), 1) +
+      `<td class="l"><span title="${esc(s.project)}">${esc(projName(s.project))}</span></td>` + td(s.model || '—', 1) +
+      td(agoShort(s.last_write)) + td(costText(s.cost_so_far, s.priced_so_far)) + td(costText(s.cost_last_hour, s.priced_last_hour)) + '</tr>').join('')
+      : `<tr><td colspan="6" class="empty">Không có phiên nào hoạt động trong ${esc(d.active_minutes)} phút gần đây</td></tr>`) + '</tbody>';
+  $('tSources').innerHTML = '<thead><tr>' + [['Hãng', 1], ['Tìm thấy', 1], ['Số bản ghi', 0], ['Lần chạy cuối', 0], ['Lỗi / chi tiết', 1]]
+    .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +
+    (d.sources.length ? d.sources.map(r => '<tr>' + td(vendorName(r.vendor), 1) + td(r.found ? 'có' : 'không', 1) + td(num(r.records)) +
+      td(r.last_run ? fmtTs(r.last_run) + ' · ' + agoShort(r.last_run) : '—') +
+      `<td class="l" style="white-space:normal">${r.error ? `<span style="color:var(--bad)">${esc(r.error)}</span>` : esc(r.detail || '—')}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="empty">Chưa có lần chạy nào.</td></tr>') + '</tbody>';
+}
+
 // ---------- filters ----------
 function fillSelect(sel, values, current, label) {
   const first = sel.options[0];
@@ -556,7 +578,7 @@ async function loadMeta() {
 }
 
 // ---------- router + refresh ----------
-const RENDER = {overview: renderOverview, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions, skills: renderSkills};
+const RENDER = {overview: renderOverview, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions, skills: renderSkills, active: renderActive};
 let busy = false, dirty = false;
 function showTab() {
   const tab = currentTab();
@@ -630,6 +652,8 @@ function init() {
   // dark/light switch: redraw charts with the other theme's colours
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refresh);
   refresh();
-  setInterval(refresh, 30000);
+  // global 30 s refresh; the Đang chạy tab has its own 10 s one (only while it is open and the page visible)
+  setInterval(() => { if (currentTab() !== 'active') refresh(); }, 30000);
+  setInterval(() => { if (currentTab() === 'active' && !document.hidden) refresh(); }, 10000);
 }
 init();
