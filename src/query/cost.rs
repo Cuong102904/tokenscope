@@ -20,6 +20,18 @@ pub struct Totals {
     pub cache_write: u64,
 }
 
+impl Totals {
+    /// The one cost-text rule for every surface: `$X` when fully priced (also `$0.00` when there
+    /// is no usage), `≥ $X` when some model has no price, `n/a` when nothing is priced.
+    pub fn display(&self) -> String {
+        match (self.unpriced_models.is_empty(), self.cost > 0.0) {
+            (true, _) => format!("${:.2}", self.cost),
+            (false, true) => format!("≥ ${:.2}", self.cost),
+            (false, false) => "n/a".into(),
+        }
+    }
+}
+
 pub fn totals(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Totals> {
     let (wh, args) = f.sql_where();
     let mut t = Totals::default();

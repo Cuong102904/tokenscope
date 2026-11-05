@@ -132,7 +132,8 @@ pub fn run_all(
     out
 }
 
-/// `~/.agent-usage/today.txt` holds today's cost (`<local date> $12.00`, so a reader can ignore a stale day) for the statusline.
+/// `~/.agent-usage/today.txt` holds today's cost (`<local date> <Totals::display>`, e.g.
+/// `2026-11-05 ≥ $1.00`; the date lets a reader ignore a stale day) for the statusline.
 fn write_today(conn: &Connection, paths: &Paths) -> anyhow::Result<()> {
     let prices = PriceTable::load(paths)?;
     let t = cost::totals(conn, &prices, &Filter::days(1))?;
@@ -140,7 +141,7 @@ fn write_today(conn: &Connection, paths: &Paths) -> anyhow::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let tmp = dir.join(format!("today.txt.{}.tmp", std::process::id()));
     let date = chrono::Local::now().format("%Y-%m-%d");
-    std::fs::write(&tmp, format!("{date} ${:.2}", t.cost))?;
+    std::fs::write(&tmp, format!("{date} {}", t.display()))?;
     std::fs::rename(&tmp, dir.join("today.txt"))?;
     Ok(())
 }

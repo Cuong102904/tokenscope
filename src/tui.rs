@@ -76,15 +76,6 @@ fn money(c: f64) -> String {
     format!("${c:.2}")
 }
 
-/// `$1.00`, `≥ $0.50` when some model has no price, `n/a` when nothing is priced.
-fn total_text(t: &Totals) -> String {
-    match (t.unpriced_models.is_empty(), t.cost > 0.0) {
-        (true, _) => money(t.cost),
-        (false, true) => format!("≥ {}", money(t.cost)),
-        (false, false) => "n/a".into(),
-    }
-}
-
 fn opt_cost(cost: Option<f64>, priced: f64) -> String {
     match cost {
         Some(c) => money(c),
@@ -154,9 +145,9 @@ pub fn render(f: &mut Frame, st: &TuiState) {
 
     let totals = format!(
         "hôm nay {} · 7 ngày {} · 30 ngày {}",
-        total_text(&st.today),
-        total_text(&st.d7),
-        total_text(&st.d30)
+        st.today.display(),
+        st.d7.display(),
+        st.d30.display()
     );
     f.render_widget(
         Paragraph::new(vec![

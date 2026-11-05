@@ -115,10 +115,6 @@ fn print_agy(conn: &Connection, note: Option<&str>) {
     }
 }
 
-fn money(c: f64) -> String {
-    format!("${c:.2}")
-}
-
 fn main() -> anyhow::Result<()> {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
@@ -212,13 +208,19 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 println!(
-                    "hôm nay {} · 7 ngày {} · 30 ngày {}",
-                    money(today.cost),
-                    money(d7.cost),
-                    money(d30.cost)
+                    "hôm nay {} · 7 ngày {} · 30 ngày {} · tất cả {}",
+                    today.display(),
+                    d7.display(),
+                    d30.display(),
+                    all.display()
                 );
                 if !all.unpriced_models.is_empty() {
                     println!("n/a (no price): {}", all.unpriced_models.join(", "));
+                }
+                for v in ALL_VENDORS {
+                    if let Some(e) = collect::load_status(&conn, v).and_then(|s| s.error) {
+                        println!("{}: unavailable ({e})", v.as_str());
+                    }
                 }
                 if refresh {
                     print_agy(&conn, agy_note.as_deref());

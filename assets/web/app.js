@@ -139,7 +139,9 @@ function drawDaily(id, daily) {
 function kpi(label, value, sub) {
   return `<div class="card kpi"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div>${sub ? `<div class="s">${esc(sub)}</div>` : ''}</div>`;
 }
-const totalText = t => (t.unpriced_models.length ? '≥ ' : '') + fmtMoney(t.cost);
+// same rule as Totals::display: '$X' fully priced, '≥ $X' partly priced, 'n/a' nothing priced
+const totalText = t => !t.unpriced_models.length ? fmtMoney(t.cost)
+  : t.cost > 0 ? '≥ ' + fmtMoney(t.cost) : 'n/a';
 const totalSub = t => num(t.sessions) + ' session · ' + num(t.messages) + ' tin nhắn';
 
 function setWarn(unpriced) {

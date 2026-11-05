@@ -113,18 +113,14 @@ fn status_prints_totals() {
     let h = home();
     let (ok, out) = run(h.path(), &["status"]);
     assert!(ok, "{out}");
-    let i = out.find("hôm nay $").expect(&out);
-    assert!(
-        out[i + "hôm nay $".len()..]
-            .chars()
-            .next()
-            .unwrap()
-            .is_ascii_digit()
-    );
+    // the fixture has an unpriced model (claude-sonnet-4-5): totals are lower bounds
+    assert!(out.contains("tất cả ≥ $"), "{out}");
+    assert!(out.contains("n/a (no price): claude-sonnet-4-5"), "{out}");
     let today = std::fs::read_to_string(h.path().join(".agent-usage/today.txt")).unwrap();
     let (date, amt) = today.split_once(' ').unwrap();
     assert_eq!(date, chrono::Local::now().format("%Y-%m-%d").to_string());
-    assert!(amt.starts_with('$'), "{today}");
+    // fixture rows are dated 2026-11-05: today's text is a lower bound, or $0.00 on later days
+    assert!(amt.starts_with("≥ $") || amt == "$0.00", "{today}");
     let (_, j) = run(h.path(), &["status", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&j).unwrap();
     assert_eq!(v["all_time"]["messages"], 3);
@@ -241,4 +237,91 @@ fn files_not_marked_done_when_write_fails() {
         .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
         .unwrap();
     assert_eq!(n, 0);
+}
+
+fn usage_rec(key: &str, model: &str, input: u64) -> agent_usage::model::UsageRecord {
+    agent_usage::model::UsageRecord {
+        msg_key: key.into(),
+        vendor: Vendor::Claude,
+        account: String::new(),
+        session_id: "s".into(),
+        project: "p".into(),
+        ts: chrono::Utc::now().timestamp(),
+        model: model.into(),
+        input,
+        output: 0,
+        reasoning: 0,
+        cache_read: 0,
+        cache_write_5m: 0,
+        cache_write_1h: 0,
+        sidechain: false,
+        skill: None,
+        plugin: None,
+    }
+}
+
+/// Empty HOME whose DB already holds today's rows (no adapter finds anything).
+fn seeded_home(rows: Vec<agent_usage::model::UsageRecord>) -> tempfile::TempDir {
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let mut c = db::open(&paths.db()).unwrap();
+    db::write_batch(
+        &mut c,
+        &Batch {
+            usage: rows,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    h
+}
+
+fn show(home: &Path) -> String {
+    use std::io::Write;
+    let mut ch = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+        .args(["statusline", "--show"])
+        .env("HOME", home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    ch.stdin.take().unwrap().write_all(b"{}").unwrap();
+    String::from_utf8_lossy(&ch.wait_with_output().unwrap().stdout).into_owned()
+}
+
+#[test]
+fn partly_and_fully_unpriced_today_never_shows_zero() {
+    // claude-fable-5-1 input is $10/M -> 100k tokens = $1.00
+    let h = seeded_home(vec![
+        usage_rec("a", "claude-fable-5-1", 100_000),
+        usage_rec("b", "mystery-model", 5),
+    ]);
+    let (ok, out) = run(h.path(), &["status"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("hôm nay ≥ $1.00"), "{out}");
+    assert!(show(h.path()).contains("≥ $1.00 hôm nay"));
+
+    let h = seeded_home(vec![usage_rec("b", "mystery-model", 5)]);
+    let (ok, out) = run(h.path(), &["status"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("hôm nay n/a"), "{out}");
+    assert!(show(h.path()).contains("n/a hôm nay"));
+}
+
+#[test]
+fn status_lists_unavailable_vendor() {
+    let h = seeded_home(vec![]);
+    let oc = h.path().join(".local/share/opencode/opencode.db");
+    std::fs::create_dir_all(oc.parent().unwrap()).unwrap();
+    std::fs::write(&oc, b"not a database at all, just text").unwrap();
+    let (ok, out) = run(h.path(), &["status"]);
+    assert!(ok, "{out}");
+    let line = out
+        .lines()
+        .find(|l| l.starts_with("opencode: unavailable ("))
+        .unwrap_or_else(|| panic!("no unavailable line in {out}"));
+    assert!(line.ends_with(')'), "{line}");
+    assert!(out.contains("hôm nay $0.00"), "{out}");
 }

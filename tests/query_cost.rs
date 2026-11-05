@@ -425,3 +425,22 @@ fn session_models_sorted_by_row_count_and_grouped_by_vendor() {
         1
     );
 }
+
+#[test]
+fn totals_display_rule() {
+    use agent_usage::query::cost::Totals;
+    let t = |cost: f64, unpriced: &[&str], messages: u64| Totals {
+        cost,
+        unpriced_models: unpriced.iter().map(|s| s.to_string()).collect(),
+        messages,
+        ..Default::default()
+    };
+    for (tot, want) in [
+        (t(12.0, &[], 3), "$12.00"),
+        (t(1.0, &["mystery"], 3), "≥ $1.00"),
+        (t(0.0, &["mystery"], 2), "n/a"),
+        (t(0.0, &[], 0), "$0.00"),
+    ] {
+        assert_eq!(tot.display(), want, "{tot:?}");
+    }
+}
