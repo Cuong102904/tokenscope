@@ -5,7 +5,7 @@ use agent_usage::db;
 use agent_usage::model::Vendor;
 use agent_usage::paths::Paths;
 use agent_usage::pricing::PriceTable;
-use agent_usage::query::{Filter, cost};
+use agent_usage::query::{Filter, active, cost};
 use agent_usage::{server, statusline};
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
@@ -232,8 +232,8 @@ fn main() -> anyhow::Result<()> {
             let conn = db::open(&paths.db())?;
             let adapters = collect::default_adapters();
             println!(
-                "{:<10} {:<10} {:<28} {:>8}  last run / error",
-                "vendor", "status", "detail", "records"
+                "{:<10} {:<10} {:<28} {:>8} {:>6}  {:<16}  last run / error",
+                "vendor", "status", "detail", "total", "new", "last limit"
             );
             for v in ALL_VENDORS {
                 let (found, detail) = match adapters.iter().find(|a| a.vendor() == v) {
@@ -251,12 +251,24 @@ fn main() -> anyhow::Result<()> {
                     },
                     None => "never run".to_string(),
                 };
+                // total = rows stored for the vendor; new = rows added by its last run
+                let (total, last_limit) = active::stored_counts(&conn, v);
+                let last_limit = last_limit
+                    .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+                    .map(|d| {
+                        d.with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| "-".into());
                 println!(
-                    "{:<10} {:<10} {:<28} {:>8}  {}",
+                    "{:<10} {:<10} {:<28} {:>8} {:>6}  {:<16}  {}",
                     v.as_str(),
                     if found { "found" } else { "not found" },
                     detail,
+                    total,
                     last.as_ref().map_or(0, |s| s.records),
+                    last_limit,
                     tail
                 );
             }

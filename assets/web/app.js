@@ -553,12 +553,13 @@ async function renderActive() {
       `<td class="l"><span title="${esc(s.project)}">${esc(projName(s.project))}</span></td>` + td(s.model || '—', 1) +
       td(agoShort(s.last_write)) + td(costText(s.cost_so_far, s.priced_so_far)) + td(costText(s.cost_last_hour, s.priced_last_hour)) + '</tr>').join('')
       : `<tr><td colspan="6" class="empty">Không có phiên nào hoạt động trong ${esc(d.active_minutes)} phút gần đây</td></tr>`) + '</tbody>';
-  $('tSources').innerHTML = '<thead><tr>' + [['Hãng', 1], ['Tìm thấy', 1], ['Số bản ghi', 0], ['Lần chạy cuối', 0], ['Lỗi / chi tiết', 1]]
+  const when = ts => ts ? fmtTs(ts) + ' · ' + agoShort(ts) : '—';
+  $('tSources').innerHTML = '<thead><tr>' + [['Hãng', 1], ['Tìm thấy', 1], ['Tổng bản ghi', 0], ['Bản ghi mới (lần chạy cuối)', 0], ['Đo hạn mức gần nhất', 0], ['Lần chạy cuối', 0], ['Lỗi / chi tiết', 1]]
     .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +
-    (d.sources.length ? d.sources.map(r => '<tr>' + td(vendorName(r.vendor), 1) + td(r.found ? 'có' : 'không', 1) + td(num(r.records)) +
-      td(r.last_run ? fmtTs(r.last_run) + ' · ' + agoShort(r.last_run) : '—') +
+    (d.sources.length ? d.sources.map(r => '<tr>' + td(vendorName(r.vendor), 1) + td(r.found ? 'có' : 'không', 1) + td(num(r.total_records)) +
+      td(num(r.records)) + td(when(r.last_limit_at)) + td(when(r.last_run)) +
       `<td class="l" style="white-space:normal">${r.error ? `<span style="color:var(--bad)">${esc(r.error)}</span>` : esc(r.detail || '—')}</td></tr>`).join('')
-      : '<tr><td colspan="5" class="empty">Chưa có lần chạy nào.</td></tr>') + '</tbody>';
+      : '<tr><td colspan="7" class="empty">Chưa có lần chạy nào.</td></tr>') + '</tbody>';
 }
 
 // ---------- filters ----------

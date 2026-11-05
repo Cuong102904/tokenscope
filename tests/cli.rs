@@ -325,3 +325,44 @@ fn status_lists_unavailable_vendor() {
     assert!(line.ends_with(')'), "{line}");
     assert!(out.contains("hôm nay $0.00"), "{out}");
 }
+
+#[test]
+fn doctor_shows_stored_totals_and_last_limit() {
+    let h = seeded_home(vec![
+        usage_rec("a", "claude-fable-5-1", 1),
+        usage_rec("b", "claude-fable-5-1", 2),
+    ]);
+    let at = 1_800_000_000i64;
+    {
+        let c = db::open(&h.path().join(".agent-usage/agent-usage.db")).unwrap();
+        c.execute(
+            "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source) VALUES('claude','','five_hour',300,10,NULL,NULL,?1,'t')",
+            [at],
+        )
+        .unwrap();
+    }
+    // a collect run finds no Claude logs in this HOME: 0 new records, 2 stored
+    assert!(run(h.path(), &["collect"]).0);
+    let (ok, out) = run(h.path(), &["doctor"]);
+    assert!(ok, "{out}");
+    let header = out.lines().next().unwrap();
+    assert!(
+        header.contains("total") && header.contains("new") && header.contains("last limit"),
+        "{header}"
+    );
+    let line = out.lines().find(|l| l.starts_with("claude")).unwrap();
+    let when = chrono::DateTime::from_timestamp(at, 0)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
+    assert!(
+        line.contains(&format!("{:>8} {:>6}  {when:<16}", 2, 0)),
+        "{line}"
+    );
+    let codex = out.lines().find(|l| l.starts_with("codex")).unwrap();
+    assert!(
+        codex.contains(&format!("{:>8} {:>6}  {:<16}", 0, 0, "-")),
+        "{codex}"
+    );
+}

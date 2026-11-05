@@ -291,5 +291,17 @@ async fn api_active_and_overview_count() {
         ),
         (Some("claude"), Some(7), Some(true))
     );
+    // stored totals, not just the last run's new rows
+    assert_eq!(src[0]["total_records"].as_i64(), Some(1));
+    assert_eq!(src[0]["last_limit_at"], serde_json::Value::Null);
+    let c = db::open(&st.paths.db()).unwrap();
+    c.execute(
+        "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source) VALUES('claude','','five_hour',300,10,NULL,NULL,?1,'t'),('claude','','weekly',10080,10,NULL,NULL,?2,'t')",
+        [now - 100, now - 50],
+    )
+    .unwrap();
+    drop(c);
+    let v = api(&st, "/api/active").await;
+    assert_eq!(v["sources"][0]["last_limit_at"].as_i64(), Some(now - 50));
     assert_eq!(api(&st, "/api/overview").await["active_count"], 1);
 }

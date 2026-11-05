@@ -82,10 +82,49 @@ pub fn list(
     Ok(out)
 }
 
+/// One row of "Nguồn dữ liệu": the last run's status (`records` = new rows of that run) plus
+/// what is stored in total.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRow {
+    #[serde(flatten)]
+    pub status: AdapterStatus,
+    /// All `usage` rows stored for this vendor.
+    pub total_records: i64,
+    /// Newest `limit_snapshots.measured_at` for this vendor (epoch seconds).
+    pub last_limit_at: Option<i64>,
+}
+
+/// `(stored usage rows, newest limit measurement)` for one vendor; zeros/`None` on any error.
+pub fn stored_counts(conn: &Connection, vendor: Vendor) -> (i64, Option<i64>) {
+    let total = conn
+        .query_row(
+            "SELECT count(*) FROM usage WHERE vendor=?1",
+            [vendor.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let last = conn
+        .query_row(
+            "SELECT max(measured_at) FROM limit_snapshots WHERE vendor=?1",
+            [vendor.as_str()],
+            |r| r.get(0),
+        )
+        .unwrap_or(None);
+    (total, last)
+}
+
 /// Stored status of every vendor that has run (kv `status:<vendor>`), in a fixed vendor order.
-pub fn sources(conn: &Connection) -> Vec<AdapterStatus> {
+pub fn sources(conn: &Connection) -> Vec<SourceRow> {
     [Vendor::Claude, Vendor::Codex, Vendor::OpenCode, Vendor::Agy]
         .into_iter()
-        .filter_map(|v| collect::load_status(conn, v))
+        .filter_map(|v| {
+            let status = collect::load_status(conn, v)?;
+            let (total_records, last_limit_at) = stored_counts(conn, v);
+            Some(SourceRow {
+                status,
+                total_records,
+                last_limit_at,
+            })
+        })
         .collect()
 }
