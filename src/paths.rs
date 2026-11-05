@@ -16,7 +16,7 @@ impl Paths {
         self.home.join(".agent-usage")
     }
     pub fn db(&self) -> PathBuf {
-        self.data_dir().join("usage.db")
+        self.data_dir().join("agent-usage.db")
     }
     pub fn snapshots_dir(&self) -> PathBuf {
         self.data_dir().join("snapshots")

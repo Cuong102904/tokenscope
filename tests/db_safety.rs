@@ -86,3 +86,25 @@ fn open_creates_wal_db() {
 fn sha8_known() {
     assert_eq!(agent_usage::model::sha8("abc"), "ba7816bf");
 }
+
+#[test]
+fn open_checks_user_version() {
+    let d = tempfile::tempdir().unwrap();
+    let fresh = d.path().join("a.db");
+    let c = agent_usage::db::open(&fresh).unwrap();
+    assert_eq!(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    drop(c);
+    agent_usage::db::open(&fresh).unwrap();
+    let other = d.path().join("b.db");
+    let c = rusqlite::Connection::open(&other).unwrap();
+    c.execute_batch("PRAGMA user_version = 7; CREATE TABLE t(x);").unwrap();
+    drop(c);
+    let e = agent_usage::db::open(&other).unwrap_err().to_string();
+    assert!(e.contains("not an agent-usage database"), "{e}");
+    // foreign db with user_version 0 but tables (e.g. the python prototype)
+    let proto = d.path().join("c.db");
+    let c = rusqlite::Connection::open(&proto).unwrap();
+    c.execute_batch("CREATE TABLE messages(x);").unwrap();
+    drop(c);
+    assert!(agent_usage::db::open(&proto).is_err());
+}

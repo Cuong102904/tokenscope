@@ -32,8 +32,16 @@ pub fn open(path: &Path) -> Result<Connection> {
     }
     let conn = Connection::open(path)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
+    if !(version == 1 || (version == 0 && tables == 0)) {
+        anyhow::bail!("not an agent-usage database: {}", path.display());
+    }
     conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
     conn.execute_batch(SCHEMA)?;
+    if version == 0 {
+        conn.execute_batch("PRAGMA user_version = 1")?;
+    }
     Ok(conn)
 }
 
