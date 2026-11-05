@@ -1,4 +1,4 @@
-source = "Claude API list prices (spec section 6)"
+source = "Claude API list prices (spec section 6); OpenAI API pricing https://developers.openai.com/api/docs/pricing"
 date = "2026-11-05"
 
 # $ per 1M tokens. Keys are model-name prefixes; the longest match wins.
@@ -58,3 +58,47 @@ cache_read = 0.01
 input = 1
 output = 5
 cache_read = 0.10
+
+# OpenAI: source https://developers.openai.com/api/docs/pricing, read 2026-11-05.
+# Short-context tier (<= 272K input). Long-context tier not modelled.
+[models."gpt-5.4"]
+input = 2.50
+output = 15.00
+cache_read = 0.25
+[models."gpt-5.4-mini"]
+input = 0.75
+output = 4.50
+cache_read = 0.075
+[models."gpt-5.5"]
+input = 5.00
+output = 30.00
+cache_read = 0.50
+[models."gpt-5.6-luna"]
+input = 0.20
+output = 1.20
+cache_read = 0.02
+# promotional until 2026-11-30
+[models."gpt-5.6-sol"]
+input = 4.00
+output = 20.00
+cache_read = 0.40
+[models."gpt-5.6-terra"]
+input = 2.00
+output = 12.00
+cache_read = 0.20
+[models."gpt-6-astra"]
+input = 10.00
+output = 50.00
+cache_read = 1.00
+[models."gpt-6-luna"]
+input = 0.10
+output = 0.50
+cache_read = 0.01
+[models."gpt-6.1-sol"]
+input = 2.00
+output = 10.00
+cache_read = 0.10
+[models."gpt-6.1-terra"]
+input = 1.00
+output = 5.00
+cache_read = 0.05
