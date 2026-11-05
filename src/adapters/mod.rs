@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod claude_snapshots;
+pub mod codex;
 
 use crate::config::Config;
 use crate::model::{Batch, Vendor};

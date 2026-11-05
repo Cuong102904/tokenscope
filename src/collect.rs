@@ -1,4 +1,4 @@
-use crate::adapters::{Adapter, CollectCtx, claude::ClaudeAdapter, claude_snapshots::ClaudeSnapshotsAdapter};
+use crate::adapters::{Adapter, CollectCtx, claude::ClaudeAdapter, claude_snapshots::ClaudeSnapshotsAdapter, codex::CodexAdapter};
 use crate::config::Config;
 use crate::db;
 use crate::model::Vendor;
@@ -22,7 +22,7 @@ pub struct AdapterStatus {
 
 /// The single registration point for adapters; later tasks append here.
 pub fn default_adapters() -> Vec<Box<dyn Adapter>> {
-    vec![Box::new(ClaudeAdapter), Box::new(ClaudeSnapshotsAdapter)]
+    vec![Box::new(ClaudeAdapter), Box::new(ClaudeSnapshotsAdapter), Box::new(CodexAdapter)]
 }
 
 fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
