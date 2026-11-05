@@ -110,6 +110,10 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
         for r in &b.sessions {
             ss.execute(params![r.vendor.as_str(), r.session_id, r.project, r.title, r.source_path, r.last_write])?;
         }
+        let mut k = tx.prepare("INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)")?;
+        for (key, value) in &b.kv {
+            k.execute(params![key, value])?;
+        }
     }
     tx.commit()?;
     Ok(())

@@ -2,6 +2,7 @@ pub mod agy;
 pub mod claude;
 pub mod claude_snapshots;
 pub mod codex;
+pub mod opencode;
 
 use crate::config::Config;
 use crate::model::{Batch, Vendor};

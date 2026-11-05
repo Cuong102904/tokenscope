@@ -105,6 +105,8 @@ pub struct Batch {
     pub skills: Vec<SkillEvent>,
     pub tools: Vec<ToolEvent>,
     pub sessions: Vec<SessionInfo>,
+    /// kv upserts applied in the same transaction as the batch (e.g. an incremental watermark).
+    pub kv: Vec<(String, String)>,
 }
 
 /// First 8 hex chars of sha256(s); used for every account identifier.
