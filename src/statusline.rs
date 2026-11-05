@@ -232,7 +232,7 @@ fn write_executable_atomic(path: &Path, content: &str) -> anyhow::Result<()> {
 /// Build the suggested `statusLine` snippet. Only reads `~/.claude/settings.json`;
 /// the user's old command is copied to our own `wrapped-statusline.sh`.
 pub fn print_snippet(paths: &Paths) -> String {
-    let existing = std::fs::read_to_string(paths.home.join(".claude/settings.json"))
+    let existing = crate::safety::read_to_string_guarded(&paths.home.join(".claude/settings.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| v["statusLine"]["command"].as_str().map(String::from));

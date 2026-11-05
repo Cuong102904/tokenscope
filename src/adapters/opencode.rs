@@ -93,6 +93,7 @@ fn parse_message(
 /// `json_extract` in SQL: one row with invalid JSON would fail the whole statement and the
 /// watermark would never advance. Returns the batch and the number of rows whose `data` is not JSON.
 pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<(Batch, usize)> {
+    crate::safety::check_path(db_path)?;
     let conn = open_ro(db_path)?;
     let max: Option<i64> = conn.query_row(
         "SELECT max(time_updated) FROM message WHERE time_updated > ?1",

@@ -232,3 +232,17 @@ fn assistant_without_model_is_recorded_as_unknown() {
         .unwrap();
     assert_eq!(m, "unknown");
 }
+
+#[test]
+fn opencode_db_symlinked_to_forbidden_name_is_not_opened() {
+    let mut e = setup();
+    let real = e.paths.opencode_db();
+    let hidden = real.with_file_name("token-cache.db");
+    std::fs::rename(&real, &hidden).unwrap();
+    std::os::unix::fs::symlink(&hidden, &real).unwrap();
+    let cfg = Config::default();
+    let st = collect::run_all(&mut e.conn, &e.paths, &cfg, &[Box::new(OpenCodeAdapter)]);
+    let err = st[0].error.clone().unwrap_or_default();
+    assert!(err.contains("never-read"), "{err:?}");
+    assert_eq!(count(&e), 0);
+}

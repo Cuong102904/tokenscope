@@ -62,7 +62,8 @@ impl Adapter for ClaudeSnapshotsAdapter {
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
         let mut batch = Batch::default();
         for p in files(ctx.paths) {
-            let parsed = std::fs::read_to_string(&p)
+            // a forbidden link target counts as unreadable; removing the link never touches it
+            let parsed = crate::safety::read_to_string_guarded(&p)
                 .ok()
                 .and_then(|t| serde_json::from_str::<Value>(&t).ok());
             // our own files: a corrupt one is counted once, then deleted

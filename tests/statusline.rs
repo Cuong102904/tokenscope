@@ -366,3 +366,44 @@ fn corrupt_snapshot_counted_once_then_removed() {
     let st = run_all(&mut conn, &paths, &Config::default(), &ads);
     assert!(!st[0].found);
 }
+
+#[test]
+fn print_snippet_does_not_read_settings_symlinked_to_credentials() {
+    let h = tempfile::tempdir().unwrap();
+    let dir = h.path().join(".claude");
+    std::fs::create_dir_all(&dir).unwrap();
+    let cred = dir.join(".credentials.json");
+    std::fs::write(&cred, r#"{"statusLine":{"command":"echo SECRET"}}"#).unwrap();
+    std::os::unix::fs::symlink(&cred, dir.join("settings.json")).unwrap();
+    let out = agent_usage::statusline::print_snippet(&Paths {
+        home: h.path().to_path_buf(),
+    });
+    assert!(!out.contains("--wrap-file"), "{out}");
+    assert!(!h.path().join(".agent-usage/wrapped-statusline.sh").exists());
+}
+
+#[test]
+fn snapshot_symlinked_to_forbidden_name_is_not_read() {
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let dir = paths.snapshots_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = h.path().join("oauth-x.json");
+    std::fs::write(
+        &secret,
+        r#"{"account":"a","measured_at":1800000000,"five_hour":{"used_percent":5,"resets_at":null}}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&secret, dir.join("claude-x-202611050000.json")).unwrap();
+    let mut conn = db::open(&paths.db()).unwrap();
+    let ads: Vec<Box<dyn Adapter>> = vec![Box::new(ClaudeSnapshotsAdapter)];
+    let st = run_all(&mut conn, &paths, &Config::default(), &ads);
+    let n: i64 = conn
+        .query_row("SELECT count(*) FROM limit_snapshots", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0, "{:?}", st[0]);
+    assert!(st[0].detail.contains("1 unreadable"), "{:?}", st[0]);
+    assert!(secret.exists(), "the link target is never touched");
+}

@@ -194,3 +194,18 @@ fn sessions_upsert_keeps_non_empty_values() {
         )
     );
 }
+
+#[test]
+fn guarded_helpers_refuse_symlink_to_forbidden() {
+    let d = tempfile::tempdir().unwrap();
+    let secret = d.path().join("my-token-store.json");
+    std::fs::write(&secret, "{}").unwrap();
+    let link = d.path().join("innocent.json");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+    assert!(safety::check_path(&link).is_err());
+    assert!(safety::read_to_string_guarded(&link).is_err());
+    let ok = d.path().join("fine.json");
+    std::fs::write(&ok, "{}").unwrap();
+    assert!(safety::check_path(&ok).is_ok());
+    assert_eq!(safety::read_to_string_guarded(&ok).unwrap(), "{}");
+}
