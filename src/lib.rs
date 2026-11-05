@@ -10,3 +10,4 @@ pub mod safety;
 pub mod scan;
 pub mod statusline;
 pub mod server;
+pub mod tui;

@@ -206,7 +206,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Serve { port } => server::serve(paths, port)?,
-        Cmd::Tui => todo!("tui"),
+        Cmd::Tui => agent_usage::tui::run(paths)?,
         Cmd::Statusline { .. } => unreachable!("handled above"),
     }
     Ok(())
