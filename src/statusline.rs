@@ -89,8 +89,9 @@ fn write_snapshot(paths: &Paths, account: &str, five: Option<Window>, seven: Opt
         "account": account, "measured_at": now.timestamp(),
         "five_hour": w(five), "seven_day": w(seven),
     });
-    let name = format!("claude-{}-{}.json", now.timestamp_millis(), std::process::id());
-    let tmp = dir.join(format!(".{name}.tmp"));
+    // one file per account per UTC minute, overwritten in place: bounded growth, no read_dir
+    let name = format!("claude-{}-{}.json", crate::model::sha8(account), now.format("%Y%m%d%H%M"));
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     std::fs::write(&tmp, body.to_string())?;
     std::fs::rename(&tmp, dir.join(name))?;
     Ok(())
@@ -114,6 +115,12 @@ fn summary(paths: Option<&Paths>, five: Option<Window>, seven: Option<Window>) -
         parts.push(format!("{c} hôm nay"));
     }
     parts.join(" · ")
+}
+
+/// Fallback for unparseable arguments: the status line must still exit 0.
+pub fn passthrough() {
+    let mut sink = vec![];
+    let _ = std::io::stdin().read_to_end(&mut sink);
 }
 
 pub fn run(args: &Args, paths: Option<&Paths>) {

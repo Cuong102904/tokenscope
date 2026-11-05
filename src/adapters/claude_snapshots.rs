@@ -56,13 +56,16 @@ impl Adapter for ClaudeSnapshotsAdapter {
         let mut batch = Batch::default();
         for p in files(ctx.paths) {
             let parsed = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            // our own files: a corrupt one is counted once, then deleted
             let Some(v) = parsed else {
                 ctx.unreadable += 1;
+                ctx.remove_after_write.push(p);
                 continue;
             };
             let account = v["account"].as_str().unwrap_or(&ctx.config.claude_account);
             let Some(at) = v["measured_at"].as_i64() else {
                 ctx.unreadable += 1;
+                ctx.remove_after_write.push(p);
                 continue;
             };
             window(&v["five_hour"], "five_hour", 300, account, at, &mut batch);

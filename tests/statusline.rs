@@ -161,8 +161,8 @@ fn snapshots_ingested_and_removed() {
 
 #[test]
 fn default_adapters_include_snapshots() {
-    let n = agent_usage::collect::default_adapters().len();
-    assert_eq!(n, 2);
+    let ads = agent_usage::collect::default_adapters();
+    assert!(ads.iter().any(|a| a.vendor() == agent_usage::model::Vendor::Claude && a.is_auxiliary()));
 }
 
 #[test]
@@ -211,4 +211,49 @@ fn print_snippet_without_existing_command() {
     assert!(out.contains("agent-usage statusline --show"), "{out}");
     assert!(!out.contains("--wrap"), "{out}");
     assert!(!h.path().join(".agent-usage/wrapped-statusline.sh").exists());
+}
+
+#[test]
+fn same_minute_runs_overwrite_one_file() {
+    let h = tempfile::tempdir().unwrap();
+    let a = r#"{"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":1}}}"#;
+    let b = r#"{"rate_limits":{"five_hour":{"used_percentage":20,"resets_at":1}}}"#;
+    // retry if the two runs straddle a minute boundary
+    for _ in 0..3 {
+        let _ = std::fs::remove_dir_all(h.path().join(".agent-usage/snapshots"));
+        run(h.path(), &["statusline"], a, &[]);
+        run(h.path(), &["statusline"], b, &[]);
+        let s = snaps(h.path());
+        if s.len() == 1 {
+            let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&s[0]).unwrap()).unwrap();
+            assert_eq!(v["five_hour"]["used_percent"], 20.0);
+            return;
+        }
+    }
+    panic!("never got a single file");
+}
+
+#[test]
+fn bad_args_still_exit_zero() {
+    let h = tempfile::tempdir().unwrap();
+    let (ok, out, _) = run(h.path(), &["statusline", "--bogus"], STDIN, &[]);
+    assert!(ok);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn corrupt_snapshot_counted_once_then_removed() {
+    let h = tempfile::tempdir().unwrap();
+    let d = h.path().join(".agent-usage/snapshots");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("claude-bad-1.json"), "{nope").unwrap();
+    std::fs::write(d.join("claude-nomeasure-1.json"), r#"{"five_hour":{"used_percent":1}}"#).unwrap();
+    let paths = Paths { home: h.path().to_path_buf() };
+    let mut conn = db::open(&paths.db()).unwrap();
+    let ads: Vec<Box<dyn Adapter>> = vec![Box::new(ClaudeSnapshotsAdapter)];
+    let st = run_all(&mut conn, &paths, &Config::default(), &ads);
+    assert!(st[0].detail.ends_with(", 2 unreadable"), "{}", st[0].detail);
+    assert!(snaps(h.path()).is_empty());
+    let st = run_all(&mut conn, &paths, &Config::default(), &ads);
+    assert!(!st[0].found);
 }

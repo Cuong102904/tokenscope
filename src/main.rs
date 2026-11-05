@@ -70,7 +70,16 @@ fn money(c: f64) -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            if e.use_stderr() && std::env::args().nth(1).as_deref() == Some("statusline") {
+                statusline::passthrough();
+                return Ok(());
+            }
+            e.exit()
+        }
+    };
     if let Cmd::Statusline { wrap, wrap_file, show, account, print_snippet } = cli.cmd {
         // never fails: the status line must always print something and exit 0
         let args = statusline::Args { wrap, wrap_file, show, account, print_snippet };
