@@ -58,7 +58,8 @@ fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter,
 }
 
 /// Run every adapter (a failure or panic in one never stops the others),
-/// persist each status under `kv` key `status:<vendor>`, and refresh `today.txt`.
+/// persist each status under `kv` key `status:<vendor>`, thin out old limit
+/// snapshots (once a day), and refresh `today.txt`.
 pub fn run_all(conn: &mut Connection, paths: &Paths, cfg: &Config, adapters: &[Box<dyn Adapter>]) -> Vec<AdapterStatus> {
     let mut out = vec![];
     for ad in adapters {
@@ -86,6 +87,10 @@ pub fn run_all(conn: &mut Connection, paths: &Paths, cfg: &Config, adapters: &[B
             );
         }
         out.push(st);
+    }
+    // limit-snapshot retention (no-op unless a day has passed since the last run)
+    if let Err(e) = crate::db::downsample_daily(conn, chrono::Utc::now().timestamp()) {
+        eprintln!("warning: downsampling limit snapshots: {e:#}");
     }
     if let Err(e) = write_today(conn, paths) {
         eprintln!("warning: could not write today.txt: {e:#}");

@@ -364,9 +364,6 @@ impl Collector {
                         eprintln!("collector: {}: {e}", s.vendor.as_str());
                     }
                 }
-                if let Err(e) = db::downsample_daily(conn, chrono::Utc::now().timestamp()) {
-                    eprintln!("collector: downsampling limit snapshots: {e:#}");
-                }
                 true
             }
             Err(_) => {

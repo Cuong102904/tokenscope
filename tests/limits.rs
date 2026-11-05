@@ -235,3 +235,17 @@ fn stale_card_has_no_eta() {
     assert_eq!(x.eta, None);
     assert!(x.eta_note.contains("cũ"), "{}", x.eta_note);
 }
+
+#[test]
+fn collect_run_all_downsamples_once_a_day() {
+    let d = tempfile::tempdir().unwrap();
+    let paths = Paths { home: d.path().to_path_buf() };
+    let mut c = db::open(&paths.db()).unwrap();
+    let old = chrono::Utc::now().timestamp() - 100 * DAY;
+    snap(&c, "claude", "a", "weekly", 10080, 1.0, old + DAY, old / 300 * 300);
+    snap(&c, "claude", "a", "weekly", 10080, 2.0, old + DAY, old / 300 * 300 + MIN);
+    agent_usage::collect::run_all(&mut c, &paths, &Config::default(), &[]);
+    assert_eq!(count(&c, "weekly", old + DAY), 1, "collect must apply retention too");
+    let stamp: String = c.query_row("SELECT value FROM kv WHERE key='limits:last_downsample'", [], |r| r.get(0)).unwrap();
+    assert!(stamp.parse::<i64>().is_ok());
+}

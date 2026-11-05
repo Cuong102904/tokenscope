@@ -164,7 +164,11 @@ async function renderOverview() {
   ].join('');
   setWarn(d.totals_30d.unpriced_models);
   drawDaily('cOvDaily', d.daily);
-  renderLimitCards($('ovLimits'), d.limits_mini, true);
+  // dead accounts (expired and stale) only in the Hạn mức tab; the no-data placeholder stays
+  const shown = d.limits_mini.filter(c => c.no_data || !(c.expired && c.stale));
+  const hidden = d.limits_mini.length - shown.length;
+  renderLimitCards($('ovLimits'), shown, true);
+  if (hidden) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(hidden)} thẻ cũ — xem tab Hạn mức</a></div>`);
 }
 
 // ---------- limits ----------
@@ -259,7 +263,7 @@ const resetLines = (xs, color) => ({id: 'resetLines', afterDatasetsDraw(ch) {
   ctx.restore();
 }});
 
-let limToken = 0;
+let limToken = 0, limChartSig = '', limChartKey = '';
 async function renderLimitChart() {
   const my = ++limToken;
   const st = urlState();
@@ -268,6 +272,7 @@ async function renderLimitChart() {
   if (!st.lim) {
     $('limChartTitle').textContent = 'bấm một thẻ ở trên';
     if (charts.cLimit) { charts.cLimit.destroy(); delete charts.cLimit; }
+    limChartSig = '';
     return;
   }
   const k = splitLimKey(st.lim);
@@ -278,11 +283,17 @@ async function renderLimitChart() {
   $('limChartTitle').textContent = title + (h.points.length ? '' : ' — không có số đo trong khoảng này');
   const now = Date.now(), from = now - hours * 3600e3;
   const c = chartBase(), col = vendorColor(k.vendor);
+  // the 30 s auto-refresh: same data and theme -> keep the chart as is (no flicker)
+  const view = st.lim + '|' + hours;
+  const sig = JSON.stringify([view, h, col, c.mute, c.grid]);
+  if (sig === limChartSig && charts.cLimit) return;
+  const animate = view !== limChartKey; // animate only a new selection, never a data refresh
+  limChartSig = sig; limChartKey = view;
   draw('cLimit', {
     type: 'line',
     data: {datasets: [{label: '% đã dùng', data: h.points.map(([t, v]) => ({x: t * 1000, y: v})),
       borderColor: col, backgroundColor: col, borderWidth: 2, pointRadius: h.points.length < 60 ? 2 : 0, pointHoverRadius: 5, tension: 0}]},
-    options: {responsive: true, maintainAspectRatio: false, interaction: {mode: 'nearest', axis: 'x', intersect: false},
+    options: {responsive: true, maintainAspectRatio: false, ...(animate ? {} : {animation: false}), interaction: {mode: 'nearest', axis: 'x', intersect: false},
       scales: {
         x: {type: 'linear', min: from, max: now, ticks: {maxTicksLimit: 6, callback: v => fmtTs(v / 1000)}, grid: {display: false}},
         y: {min: 0, max: 100, ticks: {callback: v => v + '%'}, grid: {color: c.grid}},
