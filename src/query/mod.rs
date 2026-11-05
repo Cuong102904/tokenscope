@@ -18,7 +18,10 @@ pub struct Filter {
 
 impl Filter {
     pub fn days(n: u32) -> Filter {
-        Filter { days: Some(n), ..Default::default() }
+        Filter {
+            days: Some(n),
+            ..Default::default()
+        }
     }
 
     /// `(" WHERE ...", params)`, or an empty clause when nothing is filtered.
@@ -30,7 +33,11 @@ impl Filter {
             conds.push("day >= ?");
             args.push(Value::Text(from.format("%Y-%m-%d").to_string()));
         }
-        for (col, v) in [("vendor", &self.vendor), ("model", &self.model), ("project", &self.project)] {
+        for (col, v) in [
+            ("vendor", &self.vendor),
+            ("model", &self.model),
+            ("project", &self.project),
+        ] {
             if let Some(v) = v {
                 conds.push(match col {
                     "vendor" => "vendor = ?",
@@ -62,11 +69,26 @@ mod tests {
             project: Some("/p".into()),
         };
         let (sql, args) = f.sql_where();
-        assert_eq!(sql, " WHERE day >= ? AND vendor = ? AND model = ? AND project = ?");
-        let from = (Local::now().date_naive() - Duration::days(6)).format("%Y-%m-%d").to_string();
-        let texts: Vec<_> = args.iter().map(|v| match v { Value::Text(s) => s.clone(), _ => panic!() }).collect();
+        assert_eq!(
+            sql,
+            " WHERE day >= ? AND vendor = ? AND model = ? AND project = ?"
+        );
+        let from = (Local::now().date_naive() - Duration::days(6))
+            .format("%Y-%m-%d")
+            .to_string();
+        let texts: Vec<_> = args
+            .iter()
+            .map(|v| match v {
+                Value::Text(s) => s.clone(),
+                _ => panic!(),
+            })
+            .collect();
         assert_eq!(texts, vec![from, "claude".into(), "m".into(), "/p".into()]);
-        let (sql, args) = Filter { model: Some("m".into()), ..Default::default() }.sql_where();
+        let (sql, args) = Filter {
+            model: Some("m".into()),
+            ..Default::default()
+        }
+        .sql_where();
         assert_eq!((sql.as_str(), args.len()), (" WHERE model = ?", 1));
     }
 }

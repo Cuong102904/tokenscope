@@ -34,18 +34,31 @@ pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<Fi
         return Ok(vec![]);
     }
     let mut out = vec![];
-    for entry in WalkDir::new(root).sort_by_file_name().into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(root)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let p = entry.path();
         if !entry.file_type().is_file() || p.extension().is_none_or(|e| e != ext) {
             continue;
         }
         // only never-read files are skipped; a file we can stat but not open is
         // still returned so the adapter's read error gets counted
-        if is_forbidden(p) || std::fs::canonicalize(p).ok().as_deref().is_some_and(is_forbidden) {
+        if is_forbidden(p)
+            || std::fs::canonicalize(p)
+                .ok()
+                .as_deref()
+                .is_some_and(is_forbidden)
+        {
             continue;
         }
-        let Ok(md) = std::fs::metadata(p) else { continue };
-        let Ok((size, mtime)) = stat(&md) else { continue };
+        let Ok(md) = std::fs::metadata(p) else {
+            continue;
+        };
+        let Ok((size, mtime)) = stat(&md) else {
+            continue;
+        };
         let known: Option<(i64, i64)> = conn
             .query_row(
                 "SELECT size, mtime FROM files WHERE path=?1",
@@ -54,7 +67,11 @@ pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<Fi
             )
             .optional()?;
         if known != Some((size, mtime)) {
-            out.push(FileStamp { path: p.to_path_buf(), size: size as u64, mtime });
+            out.push(FileStamp {
+                path: p.to_path_buf(),
+                size: size as u64,
+                mtime,
+            });
         }
     }
     Ok(out)

@@ -9,7 +9,9 @@ use std::path::PathBuf;
 pub struct ClaudeSnapshotsAdapter;
 
 fn files(paths: &Paths) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(paths.snapshots_dir()) else { return vec![] };
+    let Ok(rd) = std::fs::read_dir(paths.snapshots_dir()) else {
+        return vec![];
+    };
     let mut v: Vec<PathBuf> = rd
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -24,7 +26,9 @@ fn files(paths: &Paths) -> Vec<PathBuf> {
 }
 
 fn window(v: &Value, scope: &str, minutes: i64, account: &str, measured_at: i64, out: &mut Batch) {
-    let Some(used) = v["used_percent"].as_f64() else { return };
+    let Some(used) = v["used_percent"].as_f64() else {
+        return;
+    };
     out.limits.push(LimitSnapshot {
         vendor: Vendor::Claude,
         account: account.to_string(),
@@ -49,13 +53,18 @@ impl Adapter for ClaudeSnapshotsAdapter {
 
     fn discover(&self, paths: &Paths) -> Discovery {
         let n = files(paths).len();
-        Discovery { found: n > 0, detail: format!("{n} statusline snapshots") }
+        Discovery {
+            found: n > 0,
+            detail: format!("{n} statusline snapshots"),
+        }
     }
 
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
         let mut batch = Batch::default();
         for p in files(ctx.paths) {
-            let parsed = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            let parsed = std::fs::read_to_string(&p)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok());
             // our own files: a corrupt one is counted once, then deleted
             let Some(v) = parsed else {
                 ctx.unreadable += 1;

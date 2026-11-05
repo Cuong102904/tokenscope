@@ -1,17 +1,21 @@
+use agent_usage::adapters::agy;
 use agent_usage::collect::{self, AdapterStatus};
 use agent_usage::config::Config;
+use agent_usage::db;
 use agent_usage::model::Vendor;
 use agent_usage::paths::Paths;
 use agent_usage::pricing::PriceTable;
-use agent_usage::adapters::agy;
-use agent_usage::{server, statusline};
 use agent_usage::query::{Filter, cost};
-use agent_usage::db;
+use agent_usage::{server, statusline};
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
 
 #[derive(Parser)]
-#[command(name = "agent-usage", version, about = "Estimated cost and rate limits for local coding agents")]
+#[command(
+    name = "agent-usage",
+    version,
+    about = "Estimated cost and rate limits for local coding agents"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -81,7 +85,14 @@ fn agy_rows(conn: &Connection) -> Vec<(String, f64, Option<i64>, i64)> {
     ) else {
         return vec![];
     };
-    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?, r.get::<_, Option<i64>>(2)?, r.get::<_, i64>(3)?)));
+    let rows = st.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, f64>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, i64>(3)?,
+        ))
+    });
     rows.into_iter().flatten().flatten().collect()
 }
 
@@ -91,8 +102,16 @@ fn print_agy(conn: &Connection, note: Option<&str>) {
         println!("{n}");
     }
     for (scope, used, resets, at) in agy_rows(conn) {
-        let fmt = |t: i64| chrono::DateTime::from_timestamp(t, 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
-        println!("agy {scope}: {used:.0}% used (resets {}, measured {})", resets.map(fmt).unwrap_or_else(|| "?".into()), fmt(at));
+        let fmt = |t: i64| {
+            chrono::DateTime::from_timestamp(t, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_default()
+        };
+        println!(
+            "agy {scope}: {used:.0}% used (resets {}, measured {})",
+            resets.map(fmt).unwrap_or_else(|| "?".into()),
+            fmt(at)
+        );
     }
 }
 
@@ -111,9 +130,22 @@ fn main() -> anyhow::Result<()> {
             e.exit()
         }
     };
-    if let Cmd::Statusline { wrap, wrap_file, show, account, print_snippet } = cli.cmd {
+    if let Cmd::Statusline {
+        wrap,
+        wrap_file,
+        show,
+        account,
+        print_snippet,
+    } = cli.cmd
+    {
         // never fails: the status line must always print something and exit 0
-        let args = statusline::Args { wrap, wrap_file, show, account, print_snippet };
+        let args = statusline::Args {
+            wrap,
+            wrap_file,
+            show,
+            account,
+            print_snippet,
+        };
         statusline::run(&args, Paths::from_env().ok().as_ref());
         return Ok(());
     }
@@ -126,7 +158,12 @@ fn main() -> anyhow::Result<()> {
             for s in &statuses {
                 match &s.error {
                     Some(e) => println!("{}: ERROR {e}", s.vendor.as_str()),
-                    None => println!("{}: {} -> {} records", s.vendor.as_str(), s.detail, s.records),
+                    None => println!(
+                        "{}: {} -> {} records",
+                        s.vendor.as_str(),
+                        s.detail,
+                        s.records
+                    ),
                 }
             }
             if bench {
@@ -140,8 +177,12 @@ fn main() -> anyhow::Result<()> {
             let agy_note = if refresh {
                 match agy::refresh(&paths, &cfg, &mut conn) {
                     Ok(agy::RefreshOutcome::Ran) => None,
-                    Ok(agy::RefreshOutcome::Throttled { next_allowed }) => Some(format!("agy: refreshed recently, next allowed at epoch {next_allowed}")),
-                    Ok(agy::RefreshOutcome::NotInstalled) => Some("agy: not found on PATH".to_string()),
+                    Ok(agy::RefreshOutcome::Throttled { next_allowed }) => Some(format!(
+                        "agy: refreshed recently, next allowed at epoch {next_allowed}"
+                    )),
+                    Ok(agy::RefreshOutcome::NotInstalled) => {
+                        Some("agy: not found on PATH".to_string())
+                    }
                     Err(e) => Some(format!("agy: refresh failed: {e:#}")),
                 }
             } else {
@@ -149,7 +190,12 @@ fn main() -> anyhow::Result<()> {
             };
             let prices = PriceTable::load(&paths)?;
             let t = |f: Filter| cost::totals(&conn, &prices, &f);
-            let (today, d7, d30, all) = (t(Filter::days(1))?, t(Filter::days(7))?, t(Filter::days(30))?, t(Filter::default())?);
+            let (today, d7, d30, all) = (
+                t(Filter::days(1))?,
+                t(Filter::days(7))?,
+                t(Filter::days(30))?,
+                t(Filter::default())?,
+            );
             if json {
                 let v = serde_json::json!({
                     "today": today, "days7": d7, "days30": d30, "all_time": all,
@@ -165,7 +211,12 @@ fn main() -> anyhow::Result<()> {
                 }
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
-                println!("hôm nay {} · 7 ngày {} · 30 ngày {}", money(today.cost), money(d7.cost), money(d30.cost));
+                println!(
+                    "hôm nay {} · 7 ngày {} · 30 ngày {}",
+                    money(today.cost),
+                    money(d7.cost),
+                    money(d30.cost)
+                );
                 if !all.unpriced_models.is_empty() {
                     println!("n/a (no price): {}", all.unpriced_models.join(", "));
                 }
@@ -178,7 +229,10 @@ fn main() -> anyhow::Result<()> {
         Cmd::Doctor => {
             let conn = db::open(&paths.db())?;
             let adapters = collect::default_adapters();
-            println!("{:<10} {:<10} {:<28} {:>8}  last run / error", "vendor", "status", "detail", "records");
+            println!(
+                "{:<10} {:<10} {:<28} {:>8}  last run / error",
+                "vendor", "status", "detail", "records"
+            );
             for v in ALL_VENDORS {
                 let (found, detail) = match adapters.iter().find(|a| a.vendor() == v) {
                     Some(a) => {

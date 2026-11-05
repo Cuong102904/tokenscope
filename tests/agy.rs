@@ -35,16 +35,35 @@ fn parse_usage_fixture() {
 #[test]
 fn refresh_runs_then_throttles() {
     let home = tempfile::tempdir().unwrap();
-    let paths = Paths { home: home.path().to_path_buf() };
-    let bin = fake_agy(home.path(), "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT");
+    let paths = Paths {
+        home: home.path().to_path_buf(),
+    };
+    let bin = fake_agy(
+        home.path(),
+        "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT",
+    );
     let mut conn = db::open(&paths.db()).unwrap();
     let cfg = Config::default();
     let out = agy::refresh_with(&paths, &cfg, &mut conn, &bin, 10_000).unwrap();
     assert!(matches!(out, RefreshOutcome::Ran));
-    let n: i64 = conn.query_row("SELECT count(*) FROM limit_snapshots WHERE vendor='agy' AND used_percent=20.0", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM limit_snapshots WHERE vendor='agy' AND used_percent=20.0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(n, 1);
     let out = agy::refresh_with(&paths, &cfg, &mut conn, &bin, 10_299).unwrap();
-    assert!(matches!(out, RefreshOutcome::Throttled { next_allowed: 10_300 }), "{out:?}");
+    assert!(
+        matches!(
+            out,
+            RefreshOutcome::Throttled {
+                next_allowed: 10_300
+            }
+        ),
+        "{out:?}"
+    );
     let out = agy::refresh_with(&paths, &cfg, &mut conn, &bin, 10_300).unwrap();
     assert!(matches!(out, RefreshOutcome::Ran));
 }
@@ -52,20 +71,38 @@ fn refresh_runs_then_throttles() {
 #[test]
 fn refresh_not_installed() {
     let home = tempfile::tempdir().unwrap();
-    let paths = Paths { home: home.path().to_path_buf() };
+    let paths = Paths {
+        home: home.path().to_path_buf(),
+    };
     let mut conn = db::open(&paths.db()).unwrap();
-    let out = agy::refresh_with(&paths, &Config::default(), &mut conn, &home.path().join("nope"), 1).unwrap();
+    let out = agy::refresh_with(
+        &paths,
+        &Config::default(),
+        &mut conn,
+        &home.path().join("nope"),
+        1,
+    )
+    .unwrap();
     assert!(matches!(out, RefreshOutcome::NotInstalled));
 }
 
 #[test]
 fn refresh_times_out_and_kills() {
     let home = tempfile::tempdir().unwrap();
-    let paths = Paths { home: home.path().to_path_buf() };
+    let paths = Paths {
+        home: home.path().to_path_buf(),
+    };
     let bin = fake_agy(home.path(), "sleep 30");
     let mut conn = db::open(&paths.db()).unwrap();
     let t = std::time::Instant::now();
-    let r = agy::refresh_with_timeout(&paths, &Config::default(), &mut conn, &bin, 1, std::time::Duration::from_millis(300));
+    let r = agy::refresh_with_timeout(
+        &paths,
+        &Config::default(),
+        &mut conn,
+        &bin,
+        1,
+        std::time::Duration::from_millis(300),
+    );
     assert!(r.is_err());
     assert!(t.elapsed().as_secs() < 5);
 }
@@ -73,7 +110,11 @@ fn refresh_times_out_and_kills() {
 #[test]
 fn email_never_stored_raw() {
     let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("old.log"), "applyAuthResult: email=old@example.com\n").unwrap();
+    std::fs::write(
+        d.path().join("old.log"),
+        "applyAuthResult: email=old@example.com\n",
+    )
+    .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(30));
     std::fs::write(
         d.path().join("new.log"),
@@ -90,10 +131,19 @@ fn email_never_stored_raw() {
 #[test]
 fn collect_does_not_run_command_and_discover_uses_path() {
     let home = tempfile::tempdir().unwrap();
-    let paths = Paths { home: home.path().to_path_buf() };
+    let paths = Paths {
+        home: home.path().to_path_buf(),
+    };
     let conn = db::open(&paths.db()).unwrap();
     let cfg = Config::default();
-    let mut ctx = CollectCtx { conn: &conn, paths: &paths, config: &cfg, done_files: vec![], unreadable: 0, remove_after_write: vec![] };
+    let mut ctx = CollectCtx {
+        conn: &conn,
+        paths: &paths,
+        config: &cfg,
+        done_files: vec![],
+        unreadable: 0,
+        remove_after_write: vec![],
+    };
     let b = AgyAdapter.collect(&mut ctx).unwrap();
     assert!(b.limits.is_empty() && b.usage.is_empty());
     let _ = AgyAdapter.discover(&paths);
@@ -103,26 +153,54 @@ fn collect_does_not_run_command_and_discover_uses_path() {
 fn status_refresh_prints_agy_lines() {
     let home = tempfile::tempdir().unwrap();
     let bindir = tempfile::tempdir().unwrap();
-    fake_agy(bindir.path(), "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT");
-    let path = format!("{}:{}", bindir.path().display(), std::env::var("PATH").unwrap());
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage")).args(["status", "--refresh"]).env("HOME", home.path()).env("PATH", path).output().unwrap();
+    fake_agy(
+        bindir.path(),
+        "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT",
+    );
+    let path = format!(
+        "{}:{}",
+        bindir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+        .args(["status", "--refresh"])
+        .env("HOME", home.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "{out}");
-    assert!(out.contains("Gemini Models") && out.contains("20%"), "{out}");
+    assert!(
+        out.contains("Gemini Models") && out.contains("20%"),
+        "{out}"
+    );
 }
 
 fn stamped(conn: &rusqlite::Connection) -> bool {
-    conn.query_row("SELECT count(*) FROM kv WHERE key='agy:last_refresh'", [], |r| r.get::<_, i64>(0)).unwrap() == 1
+    conn.query_row(
+        "SELECT count(*) FROM kv WHERE key='agy:last_refresh'",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .unwrap()
+        == 1
 }
 
 #[test]
 fn refresh_junk_or_failing_output_is_error_but_stamps_throttle() {
-    for body in ["echo 'please log in me@example.com email=me@example.com'", "exit 1"] {
+    for body in [
+        "echo 'please log in me@example.com email=me@example.com'",
+        "exit 1",
+    ] {
         let home = tempfile::tempdir().unwrap();
-        let paths = Paths { home: home.path().to_path_buf() };
+        let paths = Paths {
+            home: home.path().to_path_buf(),
+        };
         let bin = fake_agy(home.path(), body);
         let mut conn = db::open(&paths.db()).unwrap();
-        let e = agy::refresh_with(&paths, &Config::default(), &mut conn, &bin, 500).unwrap_err().to_string();
+        let e = agy::refresh_with(&paths, &Config::default(), &mut conn, &bin, 500)
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("no weekly limit lines"), "{e}");
         assert!(!e.contains("email="), "{e}");
         assert!(stamped(&conn));
@@ -133,7 +211,11 @@ fn refresh_junk_or_failing_output_is_error_but_stamps_throttle() {
 
 #[test]
 fn parse_usage_clamps_percent() {
-    let v = agy::parse_usage("G\tWeekly Limit Remaining\t120%\t2026-11-09T00:00:00Z\nH\tWeekly Limit Remaining\t-5%\t2026-11-09T00:00:00Z", 1, "");
+    let v = agy::parse_usage(
+        "G\tWeekly Limit Remaining\t120%\t2026-11-09T00:00:00Z\nH\tWeekly Limit Remaining\t-5%\t2026-11-09T00:00:00Z",
+        1,
+        "",
+    );
     assert_eq!((v[0].used_percent, v[1].used_percent), (0.0, 100.0));
 }
 
@@ -141,9 +223,21 @@ fn parse_usage_clamps_percent() {
 fn status_refresh_json_has_agy_key() {
     let home = tempfile::tempdir().unwrap();
     let bindir = tempfile::tempdir().unwrap();
-    fake_agy(bindir.path(), "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT");
-    let path = format!("{}:{}", bindir.path().display(), std::env::var("PATH").unwrap());
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage")).args(["status", "--refresh", "--json"]).env("HOME", home.path()).env("PATH", path).output().unwrap();
+    fake_agy(
+        bindir.path(),
+        "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT",
+    );
+    let path = format!(
+        "{}:{}",
+        bindir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+        .args(["status", "--refresh", "--json"])
+        .env("HOME", home.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["agy"]["snapshots"][0]["scope"], "weekly:Gemini Models");
     assert_eq!(v["agy"]["snapshots"][0]["used_percent"], 20.0);

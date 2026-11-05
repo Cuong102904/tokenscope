@@ -33,7 +33,9 @@ fn uri_for(path: &Path) -> String {
 fn open_ro(path: &Path) -> anyhow::Result<Connection> {
     let conn = Connection::open_with_flags(
         uri_for(path),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(conn)
@@ -44,7 +46,12 @@ fn n(v: &Value) -> u64 {
 }
 
 /// `data` JSON of an assistant message -> usage record; `None` for rows without model or tokens.
-fn parse_message(id: &str, session_id: &str, time_created: i64, data: &Value) -> Option<UsageRecord> {
+fn parse_message(
+    id: &str,
+    session_id: &str,
+    time_created: i64,
+    data: &Value,
+) -> Option<UsageRecord> {
     if data["role"].as_str() != Some("assistant") {
         return None;
     }
@@ -81,8 +88,14 @@ fn parse_message(id: &str, session_id: &str, time_created: i64, data: &Value) ->
 /// window is closed even if OpenCode writes concurrently).
 pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<Batch> {
     let conn = open_ro(db_path)?;
-    let max: Option<i64> = conn.query_row("SELECT max(time_updated) FROM message WHERE time_updated > ?1", [last], |r| r.get(0))?;
-    let Some(max) = max else { return Ok(Batch::default()) };
+    let max: Option<i64> = conn.query_row(
+        "SELECT max(time_updated) FROM message WHERE time_updated > ?1",
+        [last],
+        |r| r.get(0),
+    )?;
+    let Some(max) = max else {
+        return Ok(Batch::default());
+    };
     let mut batch = Batch::default();
     let mut touched = BTreeSet::new();
     let mut st = conn.prepare(
@@ -92,8 +105,11 @@ pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<Batch> {
     )?;
     let mut rows = st.query(params![last, max])?;
     while let Some(r) = rows.next()? {
-        let (id, sid, created, data): (String, String, i64, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
-        let Ok(v) = serde_json::from_str::<Value>(&data) else { continue };
+        let (id, sid, created, data): (String, String, i64, String) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+        let Ok(v) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
         if let Some(rec) = parse_message(&id, &sid, created, &v) {
             touched.insert(sid);
             batch.usage.push(rec);
@@ -101,11 +117,25 @@ pub fn read_batch(db_path: &Path, last: i64) -> anyhow::Result<Batch> {
     }
     for sid in touched {
         let row: Option<(Option<String>, Option<String>, Option<i64>)> = conn
-            .query_row("SELECT directory, title, time_updated FROM session WHERE id=?1", [&sid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row(
+                "SELECT directory, title, time_updated FROM session WHERE id=?1",
+                [&sid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?;
         let (dir, title, upd) = row.unwrap_or_default();
         let dir = dir.unwrap_or_default();
-        let last_write = upd.map(|t| t / 1000).or_else(|| batch.usage.iter().filter(|u| u.session_id == sid).map(|u| u.ts).max()).unwrap_or(0);
+        let last_write = upd
+            .map(|t| t / 1000)
+            .or_else(|| {
+                batch
+                    .usage
+                    .iter()
+                    .filter(|u| u.session_id == sid)
+                    .map(|u| u.ts)
+                    .max()
+            })
+            .unwrap_or(0);
         for u in batch.usage.iter_mut().filter(|u| u.session_id == sid) {
             u.project = dir.clone();
         }
@@ -130,13 +160,22 @@ impl Adapter for OpenCodeAdapter {
     fn discover(&self, paths: &Paths) -> Discovery {
         let p = paths.opencode_db();
         let found = p.is_file();
-        Discovery { found, detail: if found { "opencode.db present".into() } else { "opencode.db not found".into() } }
+        Discovery {
+            found,
+            detail: if found {
+                "opencode.db present".into()
+            } else {
+                "opencode.db not found".into()
+            },
+        }
     }
 
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
         let last: i64 = ctx
             .conn
-            .query_row("SELECT value FROM kv WHERE key=?1", [KV_WATERMARK], |r| r.get::<_, String>(0))
+            .query_row("SELECT value FROM kv WHERE key=?1", [KV_WATERMARK], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()?
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);

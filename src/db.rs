@@ -39,7 +39,9 @@ pub fn open(path: &Path) -> Result<Connection> {
     }
     conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
     // schema and version in one transaction: no tables-with-version-0 state
-    conn.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA}PRAGMA user_version = 1;COMMIT;"))?;
+    conn.execute_batch(&format!(
+        "BEGIN IMMEDIATE;{SCHEMA}PRAGMA user_version = 1;COMMIT;"
+    ))?;
     Ok(conn)
 }
 
@@ -70,10 +72,23 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
         )?;
         for r in &b.usage {
             u.execute(params![
-                r.msg_key, r.vendor.as_str(), r.account, r.session_id, r.project, r.ts,
-                local_day(r.ts), r.model, r.input as i64, r.output as i64, r.reasoning as i64,
-                r.cache_read as i64, r.cache_write_5m as i64, r.cache_write_1h as i64,
-                r.sidechain as i64, r.skill, r.plugin
+                r.msg_key,
+                r.vendor.as_str(),
+                r.account,
+                r.session_id,
+                r.project,
+                r.ts,
+                local_day(r.ts),
+                r.model,
+                r.input as i64,
+                r.output as i64,
+                r.reasoning as i64,
+                r.cache_read as i64,
+                r.cache_write_5m as i64,
+                r.cache_write_1h as i64,
+                r.sidechain as i64,
+                r.skill,
+                r.plugin
             ])?;
         }
         let mut l = tx.prepare(
@@ -82,27 +97,53 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
         )?;
         for r in &b.limits {
             l.execute(params![
-                r.vendor.as_str(), r.account, r.scope, r.window_minutes, r.used_percent,
-                r.resets_at, r.plan_type, r.measured_at, r.source
+                r.vendor.as_str(),
+                r.account,
+                r.scope,
+                r.window_minutes,
+                r.used_percent,
+                r.resets_at,
+                r.plan_type,
+                r.measured_at,
+                r.source
             ])?;
         }
         let mut e = tx.prepare(
             "INSERT OR IGNORE INTO limit_events(vendor,account,ts,scope,resets_at) VALUES(?1,?2,?3,?4,?5)",
         )?;
         for r in &b.limit_events {
-            e.execute(params![r.vendor.as_str(), r.account, r.ts, r.scope, r.resets_at])?;
+            e.execute(params![
+                r.vendor.as_str(),
+                r.account,
+                r.ts,
+                r.scope,
+                r.resets_at
+            ])?;
         }
         let mut s = tx.prepare(
             "INSERT OR IGNORE INTO skill_events(vendor,session_id,ts,skill,kind,key) VALUES(?1,?2,?3,?4,?5,?6)",
         )?;
         for r in &b.skills {
-            s.execute(params![r.vendor.as_str(), r.session_id, r.ts, r.skill, r.kind, r.key])?;
+            s.execute(params![
+                r.vendor.as_str(),
+                r.session_id,
+                r.ts,
+                r.skill,
+                r.kind,
+                r.key
+            ])?;
         }
         let mut t = tx.prepare(
             "INSERT OR IGNORE INTO tool_events(vendor,session_id,ts,tool,key) VALUES(?1,?2,?3,?4,?5)",
         )?;
         for r in &b.tools {
-            t.execute(params![r.vendor.as_str(), r.session_id, r.ts, r.tool, r.key])?;
+            t.execute(params![
+                r.vendor.as_str(),
+                r.session_id,
+                r.ts,
+                r.tool,
+                r.key
+            ])?;
         }
         let mut ss = tx.prepare(
             "INSERT INTO sessions(vendor,session_id,project,title,source_path,last_write) VALUES(?1,?2,?3,?4,?5,?6)
@@ -110,7 +151,14 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
                source_path=excluded.source_path, last_write=max(coalesce(sessions.last_write,0), coalesce(excluded.last_write,0))",
         )?;
         for r in &b.sessions {
-            ss.execute(params![r.vendor.as_str(), r.session_id, r.project, r.title, r.source_path, r.last_write])?;
+            ss.execute(params![
+                r.vendor.as_str(),
+                r.session_id,
+                r.project,
+                r.title,
+                r.source_path,
+                r.last_write
+            ])?;
         }
         let mut k = tx.prepare("INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)")?;
         for (key, value) in &b.kv {
@@ -143,13 +191,20 @@ pub fn downsample_limits(conn: &Connection, older_than: i64) -> Result<usize> {
 /// day (kv `limits:last_downsample`). `Some(removed)` when it ran.
 pub fn downsample_daily(conn: &Connection, now: i64) -> Result<Option<usize>> {
     let last: Option<i64> = conn
-        .query_row("SELECT value FROM kv WHERE key=?1", params![KV_LAST_DOWNSAMPLE], |r| r.get::<_, String>(0))
+        .query_row(
+            "SELECT value FROM kv WHERE key=?1",
+            params![KV_LAST_DOWNSAMPLE],
+            |r| r.get::<_, String>(0),
+        )
         .ok()
         .and_then(|v| v.parse().ok());
     if last.is_some_and(|l| now - l < 86400) {
         return Ok(None);
     }
     let removed = downsample_limits(conn, now - DOWNSAMPLE_AGE_SECS)?;
-    conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)", params![KV_LAST_DOWNSAMPLE, now.to_string()])?;
+    conn.execute(
+        "INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)",
+        params![KV_LAST_DOWNSAMPLE, now.to_string()],
+    )?;
     Ok(Some(removed))
 }

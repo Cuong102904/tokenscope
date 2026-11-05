@@ -35,7 +35,8 @@ impl Config {
         if !p.is_file() {
             return Ok(Config::default());
         }
-        let text = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+        let text =
+            std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
         toml::from_str(&text).with_context(|| format!("parsing {}", p.display()))
     }
 
@@ -45,7 +46,11 @@ impl Config {
         if let Some(l) = self.account_labels.get(&key) {
             return l.clone();
         }
-        if account.is_empty() { vendor.as_str().to_string() } else { key }
+        if account.is_empty() {
+            vendor.as_str().to_string()
+        } else {
+            key
+        }
     }
 }
 
@@ -56,7 +61,8 @@ mod tests {
     #[test]
     fn label_rules() {
         let mut c = Config::default();
-        c.account_labels.insert("codex:f8ce04de".into(), "work".into());
+        c.account_labels
+            .insert("codex:f8ce04de".into(), "work".into());
         assert_eq!(c.label(Vendor::Codex, "f8ce04de"), "work");
         assert_eq!(c.label(Vendor::Codex, "aaaa0000"), "codex:aaaa0000");
         assert_eq!(c.label(Vendor::Agy, ""), "agy");
@@ -65,12 +71,25 @@ mod tests {
     #[test]
     fn load_defaults_file_and_error() {
         let d = tempfile::tempdir().unwrap();
-        let paths = Paths { home: d.path().to_path_buf() };
+        let paths = Paths {
+            home: d.path().to_path_buf(),
+        };
         assert_eq!(Config::load(&paths).unwrap().active_minutes, 5);
         std::fs::create_dir_all(paths.data_dir()).unwrap();
-        std::fs::write(paths.config(), "active_minutes = 9\n[labels]\n\"claude:x\" = \"me\"\n").unwrap();
+        std::fs::write(
+            paths.config(),
+            "active_minutes = 9\n[labels]\n\"claude:x\" = \"me\"\n",
+        )
+        .unwrap();
         let c = Config::load(&paths).unwrap();
-        assert_eq!((c.active_minutes, c.refresh_seconds, c.claude_account.as_str()), (9, 30, "default"));
+        assert_eq!(
+            (
+                c.active_minutes,
+                c.refresh_seconds,
+                c.claude_account.as_str()
+            ),
+            (9, 30, "default")
+        );
         assert_eq!(c.label(Vendor::Claude, "x"), "me");
         std::fs::write(paths.config(), "active_minutes = [").unwrap();
         assert!(Config::load(&paths).is_err());

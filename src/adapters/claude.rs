@@ -48,15 +48,23 @@ pub fn parse_line(v: &Value, account: &str, out: &mut Batch) {
     if !usage.is_object() {
         return;
     }
-    if msg["model"].as_str().is_none_or(|m| m.is_empty() || m.starts_with('<')) {
+    if msg["model"]
+        .as_str()
+        .is_none_or(|m| m.is_empty() || m.starts_with('<'))
+    {
         return;
     }
-    let (Some(mid), Some(rid)) = (s(&msg["id"]), s(&v["requestId"])) else { return };
+    let (Some(mid), Some(rid)) = (s(&msg["id"]), s(&v["requestId"])) else {
+        return;
+    };
     let model = msg["model"].as_str().unwrap_or_default().to_string();
 
     let cc = &usage["cache_creation"];
     let (w5, w1) = if cc.is_object() {
-        (u(&cc["ephemeral_5m_input_tokens"]), u(&cc["ephemeral_1h_input_tokens"]))
+        (
+            u(&cc["ephemeral_5m_input_tokens"]),
+            u(&cc["ephemeral_1h_input_tokens"]),
+        )
     } else {
         (u(&usage["cache_creation_input_tokens"]), 0)
     };
@@ -84,7 +92,9 @@ pub fn parse_line(v: &Value, account: &str, out: &mut Batch) {
         if c["type"] != "tool_use" {
             continue;
         }
-        let (Some(id), Some(name)) = (s(&c["id"]), s(&c["name"])) else { continue };
+        let (Some(id), Some(name)) = (s(&c["id"]), s(&c["name"])) else {
+            continue;
+        };
         let key = format!("claude:{id}");
         out.tools.push(ToolEvent {
             key: key.clone(),
@@ -116,14 +126,22 @@ impl Adapter for ClaudeAdapter {
     fn discover(&self, paths: &Paths) -> Discovery {
         let root = paths.claude_projects();
         if !root.exists() {
-            return Discovery { found: false, detail: "not found".into() };
+            return Discovery {
+                found: false,
+                detail: "not found".into(),
+            };
         }
         let n = walkdir::WalkDir::new(&root)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "jsonl"))
+            .filter(|e| {
+                e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "jsonl")
+            })
             .count();
-        Discovery { found: true, detail: format!("{n} jsonl files") }
+        Discovery {
+            found: true,
+            detail: format!("{n} jsonl files"),
+        }
     }
 
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
@@ -151,14 +169,16 @@ impl Adapter for ClaudeAdapter {
             }
             if !session_id.is_empty() {
                 let last_write = stamp.mtime / 1_000_000_000;
-                let e = sessions.entry(session_id.clone()).or_insert_with(|| SessionInfo {
-                    vendor: Vendor::Claude,
-                    session_id,
-                    project: project.clone(),
-                    title: None,
-                    source_path: stamp.path.to_string_lossy().into_owned(),
-                    last_write,
-                });
+                let e = sessions
+                    .entry(session_id.clone())
+                    .or_insert_with(|| SessionInfo {
+                        vendor: Vendor::Claude,
+                        session_id,
+                        project: project.clone(),
+                        title: None,
+                        source_path: stamp.path.to_string_lossy().into_owned(),
+                        last_write,
+                    });
                 // subagent files share the parent's sessionId; keep the latest write
                 if last_write > e.last_write {
                     e.last_write = last_write;
@@ -166,7 +186,11 @@ impl Adapter for ClaudeAdapter {
                 if e.project.is_empty() {
                     e.project = project;
                 }
-                if !stamp.path.components().any(|c| c.as_os_str() == "subagents") {
+                if !stamp
+                    .path
+                    .components()
+                    .any(|c| c.as_os_str() == "subagents")
+                {
                     e.source_path = stamp.path.to_string_lossy().into_owned();
                 }
             }

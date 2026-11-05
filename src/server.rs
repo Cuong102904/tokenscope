@@ -9,8 +9,8 @@ use crate::paths::Paths;
 use crate::pricing::PriceTable;
 use crate::query::{Filter, active, cost, limits, sessions, skills};
 use axum::extract::{Path, Query, Request, State};
-use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -40,9 +40,18 @@ pub fn bind_addr(port: u16) -> String {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(|| async { asset("text/html; charset=utf-8", INDEX_HTML) }))
-        .route("/app.js", get(|| async { asset("text/javascript; charset=utf-8", APP_JS) }))
-        .route("/chart.js", get(|| async { asset("text/javascript; charset=utf-8", CHART_JS) }))
+        .route(
+            "/",
+            get(|| async { asset("text/html; charset=utf-8", INDEX_HTML) }),
+        )
+        .route(
+            "/app.js",
+            get(|| async { asset("text/javascript; charset=utf-8", APP_JS) }),
+        )
+        .route(
+            "/chart.js",
+            get(|| async { asset("text/javascript; charset=utf-8", CHART_JS) }),
+        )
         .route("/api/overview", get(overview))
         .route("/api/cost", get(cost_api))
         .route("/api/sessions", get(sessions_api))
@@ -63,12 +72,25 @@ async fn host_guard(State(st): State<AppState>, req: Request, next: Next) -> Res
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
-        .is_some_and(|h| h == format!("127.0.0.1:{}", st.port) || h == format!("localhost:{}", st.port));
-    if ok { next.run(req).await } else { (StatusCode::FORBIDDEN, "forbidden host").into_response() }
+        .is_some_and(|h| {
+            h == format!("127.0.0.1:{}", st.port) || h == format!("localhost:{}", st.port)
+        });
+    if ok {
+        next.run(req).await
+    } else {
+        (StatusCode::FORBIDDEN, "forbidden host").into_response()
+    }
 }
 
 fn asset(ctype: &'static str, body: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, ctype), (header::CACHE_CONTROL, "no-cache")], body).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, ctype),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// Query string shared by every API route. Empty values mean "no filter";
@@ -94,7 +116,12 @@ impl Params {
                 _ => return Err(ApiError::BadRequest(format!("bad days: {s}"))),
             },
         };
-        Ok(Filter { days, vendor: nonempty(&self.vendor), model: nonempty(&self.model), project: nonempty(&self.project) })
+        Ok(Filter {
+            days,
+            vendor: nonempty(&self.vendor),
+            model: nonempty(&self.model),
+            project: nonempty(&self.project),
+        })
     }
 }
 
@@ -113,7 +140,9 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m).into_response(),
-            ApiError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+            ApiError::Internal(e) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
+            }
         }
     }
 }
@@ -127,7 +156,10 @@ where
     F: FnOnce(&Connection, &AppState) -> anyhow::Result<T> + Send + 'static,
 {
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
-        let conn = Connection::open_with_flags(st.paths.db(), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        let conn = Connection::open_with_flags(
+            st.paths.db(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         conn.busy_timeout(std::time::Duration::from_millis(5000))?;
         Ok(serde_json::to_value(f(&conn, &st)?)?)
     })
@@ -173,7 +205,10 @@ async fn cost_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiRes
 async fn sessions_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
     let f = p.filter()?;
     let limit = p.limit.unwrap_or(200).min(5000);
-    with_db(st, move |c, st| sessions::list(c, &st.prices, &st.cfg, &f, limit)).await
+    with_db(st, move |c, st| {
+        sessions::list(c, &st.prices, &st.cfg, &f, limit)
+    })
+    .await
 }
 
 /// Cost by skill/plugin follows every filter; event counts follow days and vendor, and
@@ -203,8 +238,14 @@ async fn active_api(State(st): State<AppState>) -> ApiResult {
     .await
 }
 
-async fn timeline_api(State(st): State<AppState>, Path((vendor, id)): Path<(String, String)>) -> ApiResult {
-    with_db(st, move |c, st| sessions::timeline_detail(c, &st.prices, &vendor, &id)).await
+async fn timeline_api(
+    State(st): State<AppState>,
+    Path((vendor, id)): Path<(String, String)>,
+) -> ApiResult {
+    with_db(st, move |c, st| {
+        sessions::timeline_detail(c, &st.prices, &vendor, &id)
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -242,14 +283,24 @@ struct LimitsParams {
 
 /// `{ cards, events }`, plus `refresh: {status, next_allowed?, message?}` with
 /// `?refresh=agy`. A failed refresh is reported there; the cards still load.
-async fn limits_api(State(st): State<AppState>, headers: axum::http::HeaderMap, Query(p): Query<LimitsParams>) -> Response {
+async fn limits_api(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(p): Query<LimitsParams>,
+) -> Response {
     let refresh = match p.refresh.as_deref() {
         None | Some("") => None,
         Some("agy") if !headers.contains_key(REFRESH_HEADER) => {
-            return (StatusCode::FORBIDDEN, format!("refresh needs the {REFRESH_HEADER} header")).into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                format!("refresh needs the {REFRESH_HEADER} header"),
+            )
+                .into_response();
         }
         Some("agy") => Some(run_agy_refresh(st.clone()).await),
-        Some(other) => return ApiError::BadRequest(format!("unknown refresh: {other}")).into_response(),
+        Some(other) => {
+            return ApiError::BadRequest(format!("unknown refresh: {other}")).into_response();
+        }
     };
     let res = with_db(st, move |c, st| {
         let now = chrono::Utc::now().timestamp();
@@ -276,7 +327,9 @@ async fn run_agy_refresh(st: AppState) -> serde_json::Value {
     .await;
     match out {
         Ok(Ok(RefreshOutcome::Ran)) => serde_json::json!({"status": "ran"}),
-        Ok(Ok(RefreshOutcome::Throttled { next_allowed })) => serde_json::json!({"status": "throttled", "next_allowed": next_allowed}),
+        Ok(Ok(RefreshOutcome::Throttled { next_allowed })) => {
+            serde_json::json!({"status": "throttled", "next_allowed": next_allowed})
+        }
         Ok(Ok(RefreshOutcome::NotInstalled)) => serde_json::json!({"status": "not_installed"}),
         Ok(Err(e)) => serde_json::json!({"status": "error", "message": format!("{e:#}")}),
         Err(e) => serde_json::json!({"status": "error", "message": format!("worker: {e}")}),
@@ -295,8 +348,14 @@ struct HistoryParams {
 }
 
 /// `{ points: [[measured_at, used %]], resets: [resets_at] }` for one key over the last `hours` (default 24).
-async fn limits_history_api(State(st): State<AppState>, Query(p): Query<HistoryParams>) -> ApiResult {
-    let (Some(vendor), Some(scope)) = (p.vendor.filter(|s| !s.is_empty()), p.scope.filter(|s| !s.is_empty())) else {
+async fn limits_history_api(
+    State(st): State<AppState>,
+    Query(p): Query<HistoryParams>,
+) -> ApiResult {
+    let (Some(vendor), Some(scope)) = (
+        p.vendor.filter(|s| !s.is_empty()),
+        p.scope.filter(|s| !s.is_empty()),
+    ) else {
         return Err(ApiError::BadRequest("vendor and scope are required".into()));
     };
     let account = p.account.unwrap_or_default();
@@ -336,9 +395,16 @@ pub fn serve(paths: Paths, port: u16) -> anyhow::Result<()> {
             }
         });
     }
-    let state = AppState { paths, prices: Arc::new(prices), cfg: Arc::new(cfg), port };
+    let state = AppState {
+        paths,
+        prices: Arc::new(prices),
+        cfg: Arc::new(cfg),
+        port,
+    };
     let addr = bind_addr(port);
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     rt.block_on(async move {
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         println!("agent-usage: http://{addr}");
@@ -360,7 +426,13 @@ pub struct Collector {
 
 impl Collector {
     pub fn new(paths: Paths, cfg: Config) -> Collector {
-        Collector { paths, cfg, adapters: collect::default_adapters(), conn: None, open_failing: false }
+        Collector {
+            paths,
+            cfg,
+            adapters: collect::default_adapters(),
+            conn: None,
+            open_failing: false,
+        }
     }
 
     /// One collection pass; `true` when `run_all` completed.
@@ -384,9 +456,13 @@ impl Collector {
                 }
             }
         }
-        let Some(conn) = self.conn.as_mut() else { return false };
+        let Some(conn) = self.conn.as_mut() else {
+            return false;
+        };
         let (paths, cfg, adapters) = (&self.paths, &self.cfg, &self.adapters);
-        match catch_unwind(AssertUnwindSafe(|| collect::run_all(conn, paths, cfg, adapters))) {
+        match catch_unwind(AssertUnwindSafe(|| {
+            collect::run_all(conn, paths, cfg, adapters)
+        })) {
             Ok(statuses) => {
                 for s in statuses {
                     if let Some(e) = s.error {

@@ -27,7 +27,10 @@ fn malformed_middle_line_skipped_and_counted() {
     assert_eq!(skipped, 1);
     // malformed last line WITH trailing newline is a real malformed line
     std::fs::write(&p, "{\"x\":1}\nbad\n").unwrap();
-    assert_eq!(scan::read_jsonl_counted(&p).unwrap(), (vec![serde_json::json!({"x":1})], 1));
+    assert_eq!(
+        scan::read_jsonl_counted(&p).unwrap(),
+        (vec![serde_json::json!({"x":1})], 1)
+    );
 }
 
 #[test]
@@ -40,7 +43,10 @@ fn unchanged_file_not_returned_twice() {
     std::fs::write(&p, "{}\n").unwrap();
     std::fs::write(root.join("other.txt"), "x").unwrap();
     let got = scan::changed_files(&c, &root, "jsonl").unwrap();
-    assert_eq!(got.iter().map(|s| s.path.clone()).collect::<Vec<_>>(), vec![p.clone()]);
+    assert_eq!(
+        got.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
+        vec![p.clone()]
+    );
     // not marked done inside changed_files
     assert_eq!(scan::changed_files(&c, &root, "jsonl").unwrap().len(), 1);
     scan::mark_done(&c, &got).unwrap();
@@ -53,7 +59,11 @@ fn unchanged_file_not_returned_twice() {
 fn missing_root_is_empty() {
     let d = tempfile::tempdir().unwrap();
     let c = conn(d.path());
-    assert!(scan::changed_files(&c, Path::new("/không/tồn/tại"), "jsonl").unwrap().is_empty());
+    assert!(
+        scan::changed_files(&c, Path::new("/không/tồn/tại"), "jsonl")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

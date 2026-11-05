@@ -1,4 +1,7 @@
-use crate::adapters::{Adapter, CollectCtx, agy::AgyAdapter, claude::ClaudeAdapter, claude_snapshots::ClaudeSnapshotsAdapter, codex::CodexAdapter, opencode::OpenCodeAdapter};
+use crate::adapters::{
+    Adapter, CollectCtx, agy::AgyAdapter, claude::ClaudeAdapter,
+    claude_snapshots::ClaudeSnapshotsAdapter, codex::CodexAdapter, opencode::OpenCodeAdapter,
+};
 use crate::config::Config;
 use crate::db;
 use crate::model::Vendor;
@@ -22,7 +25,13 @@ pub struct AdapterStatus {
 
 /// The single registration point for adapters; later tasks append here.
 pub fn default_adapters() -> Vec<Box<dyn Adapter>> {
-    vec![Box::new(ClaudeAdapter), Box::new(ClaudeSnapshotsAdapter), Box::new(CodexAdapter), Box::new(OpenCodeAdapter), Box::new(AgyAdapter)]
+    vec![
+        Box::new(ClaudeAdapter),
+        Box::new(ClaudeSnapshotsAdapter),
+        Box::new(CodexAdapter),
+        Box::new(OpenCodeAdapter),
+        Box::new(AgyAdapter),
+    ]
 }
 
 fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
@@ -32,7 +41,13 @@ fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "adapter panicked".to_string())
 }
 
-fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter, st: &mut AdapterStatus) -> anyhow::Result<()> {
+fn run_one(
+    conn: &mut Connection,
+    paths: &Paths,
+    cfg: &Config,
+    ad: &dyn Adapter,
+    st: &mut AdapterStatus,
+) -> anyhow::Result<()> {
     let disc = ad.discover(paths);
     st.found = disc.found;
     st.detail = disc.detail;
@@ -40,9 +55,21 @@ fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter,
         return Ok(());
     }
     let (batch, done, unreadable, remove) = {
-        let mut ctx = CollectCtx { conn, paths, config: cfg, done_files: vec![], unreadable: 0, remove_after_write: vec![] };
+        let mut ctx = CollectCtx {
+            conn,
+            paths,
+            config: cfg,
+            done_files: vec![],
+            unreadable: 0,
+            remove_after_write: vec![],
+        };
         let batch = ad.collect(&mut ctx)?;
-        (batch, std::mem::take(&mut ctx.done_files), ctx.unreadable, std::mem::take(&mut ctx.remove_after_write))
+        (
+            batch,
+            std::mem::take(&mut ctx.done_files),
+            ctx.unreadable,
+            std::mem::take(&mut ctx.remove_after_write),
+        )
     };
     if unreadable > 0 {
         st.detail = format!("{}, {unreadable} unreadable", st.detail);
@@ -60,7 +87,12 @@ fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter,
 /// Run every adapter (a failure or panic in one never stops the others),
 /// persist each status under `kv` key `status:<vendor>`, thin out old limit
 /// snapshots (once a day), and refresh `today.txt`.
-pub fn run_all(conn: &mut Connection, paths: &Paths, cfg: &Config, adapters: &[Box<dyn Adapter>]) -> Vec<AdapterStatus> {
+pub fn run_all(
+    conn: &mut Connection,
+    paths: &Paths,
+    cfg: &Config,
+    adapters: &[Box<dyn Adapter>],
+) -> Vec<AdapterStatus> {
     let mut out = vec![];
     for ad in adapters {
         let mut st = AdapterStatus {
@@ -71,7 +103,9 @@ pub fn run_all(conn: &mut Connection, paths: &Paths, cfg: &Config, adapters: &[B
             error: None,
             last_run: chrono::Utc::now().timestamp(),
         };
-        match catch_unwind(AssertUnwindSafe(|| run_one(conn, paths, cfg, ad.as_ref(), &mut st))) {
+        match catch_unwind(AssertUnwindSafe(|| {
+            run_one(conn, paths, cfg, ad.as_ref(), &mut st)
+        })) {
             Ok(Ok(())) => {}
             Ok(Err(e)) => st.error = Some(format!("{e:#}")),
             Err(p) => st.error = Some(format!("panic: {}", panic_message(p))),
@@ -114,7 +148,11 @@ fn write_today(conn: &Connection, paths: &Paths) -> anyhow::Result<()> {
 /// Last stored status per vendor (for `doctor` / `serve`).
 pub fn load_status(conn: &Connection, vendor: Vendor) -> Option<AdapterStatus> {
     let v: String = conn
-        .query_row("SELECT value FROM kv WHERE key=?1", params![format!("status:{}", vendor.as_str())], |r| r.get(0))
+        .query_row(
+            "SELECT value FROM kv WHERE key=?1",
+            params![format!("status:{}", vendor.as_str())],
+            |r| r.get(0),
+        )
         .ok()?;
     serde_json::from_str(&v).ok()
 }

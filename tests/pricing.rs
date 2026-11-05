@@ -3,12 +3,17 @@ use agent_usage::pricing::PriceTable;
 
 fn embedded() -> PriceTable {
     let dir = tempfile::tempdir().unwrap();
-    PriceTable::load(&Paths { home: dir.path().to_path_buf() }).unwrap()
+    PriceTable::load(&Paths {
+        home: dir.path().to_path_buf(),
+    })
+    .unwrap()
 }
 
 fn with_user_file(content: &str) -> anyhow::Result<PriceTable> {
     let dir = tempfile::tempdir().unwrap();
-    let p = Paths { home: dir.path().to_path_buf() };
+    let p = Paths {
+        home: dir.path().to_path_buf(),
+    };
     std::fs::create_dir_all(p.data_dir()).unwrap();
     std::fs::write(p.data_dir().join("pricing.toml"), content).unwrap();
     PriceTable::load(&p)
@@ -26,7 +31,14 @@ fn longest_prefix_wins() {
 fn cost_formula() {
     let t = embedded();
     let c = t
-        .cost("claude-opus-5-5", 1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000)
+        .cost(
+            "claude-opus-5-5",
+            1_000_000,
+            1_000_000,
+            1_000_000,
+            1_000_000,
+            1_000_000,
+        )
         .unwrap();
     assert!((c - 37.20).abs() < 1e-9, "{c}");
 }
@@ -76,9 +88,19 @@ fn all_prices_pinned() {
     ];
     let t = embedded();
     for &(model, input, output, cache_read) in cases {
-        let p = t.lookup(model).unwrap_or_else(|| panic!("no price for {model}"));
-        assert!((p.input - input).abs() < 1e-12, "{model} input: {}", p.input);
-        assert!((p.output - output).abs() < 1e-12, "{model} output: {}", p.output);
+        let p = t
+            .lookup(model)
+            .unwrap_or_else(|| panic!("no price for {model}"));
+        assert!(
+            (p.input - input).abs() < 1e-12,
+            "{model} input: {}",
+            p.input
+        );
+        assert!(
+            (p.output - output).abs() < 1e-12,
+            "{model} output: {}",
+            p.output
+        );
         assert!(
             (p.cache_read - cache_read).abs() < 1e-12,
             "{model} cache_read: {}",
@@ -90,7 +112,10 @@ fn all_prices_pinned() {
     // Longest-prefix pins between sibling keys.
     assert_eq!(t.lookup("gpt-5.4-mini").unwrap().input, 0.75);
     assert_eq!(t.lookup("gpt-6.1-sol").unwrap().input, 2.00);
-    assert_eq!(t.lookup("claude-fable-5-1-20261001").unwrap().cache_read, 0.25);
+    assert_eq!(
+        t.lookup("claude-fable-5-1-20261001").unwrap().cache_read,
+        0.25
+    );
 }
 
 #[test]

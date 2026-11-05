@@ -57,15 +57,26 @@ struct SkillRow {
     cost: Option<f64>,
 }
 
-fn load_skill_rows(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Vec<SkillRow>> {
+fn load_skill_rows(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<SkillRow>> {
     let (wh, args) = f.sql_where();
-    let wh = if wh.is_empty() { " WHERE skill IS NOT NULL AND skill <> ''".to_string() } else { format!("{wh} AND skill IS NOT NULL AND skill <> ''") };
+    let wh = if wh.is_empty() {
+        " WHERE skill IS NOT NULL AND skill <> ''".to_string()
+    } else {
+        format!("{wh} AND skill IS NOT NULL AND skill <> ''")
+    };
     let sql = format!(
         "SELECT skill, plugin, model, input, output, cache_read, cache_write_5m, cache_write_1h FROM usage{wh}"
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params_from_iter(args.iter()), |r| {
-        let n = |i: usize| r.get::<_, Option<i64>>(i).map(|v| v.unwrap_or(0).max(0) as u64);
+        let n = |i: usize| {
+            r.get::<_, Option<i64>>(i)
+                .map(|v| v.unwrap_or(0).max(0) as u64)
+        };
         let model = r.get::<_, Option<String>>(2)?.unwrap_or_default();
         Ok(SkillRow {
             skill: r.get(0)?,
@@ -77,7 +88,11 @@ fn load_skill_rows(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow
 }
 
 /// Sorted by priced cost descending (skill name breaks ties).
-pub fn by_cost(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Vec<SkillCost>> {
+pub fn by_cost(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<SkillCost>> {
     let mut m: BTreeMap<String, (Option<String>, Acc, u64)> = BTreeMap::new();
     for r in load_skill_rows(conn, prices, f)? {
         let e = m.entry(r.skill).or_default();
@@ -89,23 +104,47 @@ pub fn by_cost(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Re
     }
     let mut v: Vec<SkillCost> = m
         .into_iter()
-        .map(|(skill, (plugin, acc, messages))| SkillCost { skill, plugin, cost: acc.cost(), priced_cost: acc.priced, messages })
+        .map(|(skill, (plugin, acc, messages))| SkillCost {
+            skill,
+            plugin,
+            cost: acc.cost(),
+            priced_cost: acc.priced,
+            messages,
+        })
         .collect();
-    v.sort_by(|a, b| b.priced_cost.total_cmp(&a.priced_cost).then_with(|| a.skill.cmp(&b.skill)));
+    v.sort_by(|a, b| {
+        b.priced_cost
+            .total_cmp(&a.priced_cost)
+            .then_with(|| a.skill.cmp(&b.skill))
+    });
     Ok(v)
 }
 
 /// Cost by plugin; messages with a skill but no plugin are grouped under "(không có plugin)".
-pub fn by_plugin(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Vec<PluginCost>> {
+pub fn by_plugin(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<PluginCost>> {
     let mut m: BTreeMap<String, Acc> = BTreeMap::new();
     for r in load_skill_rows(conn, prices, f)? {
-        m.entry(r.plugin.unwrap_or_else(|| NO_PLUGIN.to_string())).or_default().add(r.cost);
+        m.entry(r.plugin.unwrap_or_else(|| NO_PLUGIN.to_string()))
+            .or_default()
+            .add(r.cost);
     }
     let mut v: Vec<PluginCost> = m
         .into_iter()
-        .map(|(plugin, acc)| PluginCost { plugin, cost: acc.cost(), priced_cost: acc.priced })
+        .map(|(plugin, acc)| PluginCost {
+            plugin,
+            cost: acc.cost(),
+            priced_cost: acc.priced,
+        })
         .collect();
-    v.sort_by(|a, b| b.priced_cost.total_cmp(&a.priced_cost).then_with(|| a.plugin.cmp(&b.plugin)));
+    v.sort_by(|a, b| {
+        b.priced_cost
+            .total_cmp(&a.priced_cost)
+            .then_with(|| a.plugin.cmp(&b.plugin))
+    });
     Ok(v)
 }
 
@@ -135,7 +174,11 @@ fn events_where(f: &Filter) -> (String, Vec<Value>) {
             args.push(Value::Text(v.clone()));
         }
     }
-    if conds.is_empty() { (String::new(), args) } else { (format!(" WHERE {}", conds.join(" AND ")), args) }
+    if conds.is_empty() {
+        (String::new(), args)
+    } else {
+        (format!(" WHERE {}", conds.join(" AND ")), args)
+    }
 }
 
 /// Per (vendor, skill, kind), most used first.
@@ -167,7 +210,11 @@ pub fn tools(conn: &Connection, f: &Filter) -> anyhow::Result<Vec<ToolCount>> {
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params_from_iter(args.iter()), |r| {
-        Ok(ToolCount { vendor: r.get(0)?, tool: r.get(1)?, count: r.get::<_, i64>(2)? as u64 })
+        Ok(ToolCount {
+            vendor: r.get(0)?,
+            tool: r.get(1)?,
+            count: r.get::<_, i64>(2)? as u64,
+        })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
 }

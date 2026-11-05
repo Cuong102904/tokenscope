@@ -15,7 +15,9 @@ fn s(v: &Value) -> Option<String> {
 }
 
 fn ts_of(v: &Value) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(v["timestamp"].as_str()?).ok().map(|d| d.timestamp())
+    chrono::DateTime::parse_from_rfc3339(v["timestamp"].as_str()?)
+        .ok()
+        .map(|d| d.timestamp())
 }
 
 pub fn scope_for(window_minutes: i64) -> String {
@@ -32,7 +34,9 @@ fn skills_in(text: &str) -> Vec<String> {
     let mut out = vec![];
     for (i, _) in text.match_indices("/SKILL.md") {
         let head = &text[..i];
-        let start = head.rfind(['/', ' ', '"', '\'', '=', ':', '\\']).map_or(0, |p| p + 1);
+        let start = head
+            .rfind(['/', ' ', '"', '\'', '=', ':', '\\'])
+            .map_or(0, |p| p + 1);
         let name = &head[start..];
         if !name.is_empty() {
             out.push(name.to_string());
@@ -46,7 +50,9 @@ fn meta(p: &Value) -> (String, String, String) {
     (
         s(&p["id"]).unwrap_or_default(),
         s(&p["cwd"]).unwrap_or_default(),
-        s(&p["creator_account_id"]).map(|a| sha8(&a)).unwrap_or_default(),
+        s(&p["creator_account_id"])
+            .map(|a| sha8(&a))
+            .unwrap_or_default(),
     )
 }
 
@@ -107,7 +113,12 @@ pub fn parse_rollout(lines: &[Value], out: &mut Batch) -> (String, String) {
                         _ => String::new(),
                     };
                     for w in ["primary", "secondary"] {
-                        let (Some(wm), Some(used)) = (rl[w]["window_minutes"].as_i64(), rl[w]["used_percent"].as_f64()) else { continue };
+                        let (Some(wm), Some(used)) = (
+                            rl[w]["window_minutes"].as_i64(),
+                            rl[w]["used_percent"].as_f64(),
+                        ) else {
+                            continue;
+                        };
                         out.limits.push(LimitSnapshot {
                             vendor: Vendor::Codex,
                             account: account.clone(),
@@ -131,8 +142,15 @@ pub fn parse_rollout(lines: &[Value], out: &mut Batch) -> (String, String) {
                     }
                 }
             }
-            Some("response_item") if matches!(p["type"].as_str(), Some("function_call" | "custom_tool_call")) => {
-                let (Some(name), Some(call_id)) = (s(&p["name"]), s(&p["call_id"])) else { continue };
+            Some("response_item")
+                if matches!(
+                    p["type"].as_str(),
+                    Some("function_call" | "custom_tool_call")
+                ) =>
+            {
+                let (Some(name), Some(call_id)) = (s(&p["name"]), s(&p["call_id"])) else {
+                    continue;
+                };
                 out.tools.push(ToolEvent {
                     key: format!("codex:{call_id}"),
                     vendor: Vendor::Codex,
@@ -171,14 +189,22 @@ impl Adapter for CodexAdapter {
     fn discover(&self, paths: &Paths) -> Discovery {
         let root = paths.codex_sessions();
         if !root.exists() {
-            return Discovery { found: false, detail: "not found".into() };
+            return Discovery {
+                found: false,
+                detail: "not found".into(),
+            };
         }
         let n = walkdir::WalkDir::new(&root)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "jsonl"))
+            .filter(|e| {
+                e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "jsonl")
+            })
             .count();
-        Discovery { found: true, detail: format!("{n} jsonl files") }
+        Discovery {
+            found: true,
+            detail: format!("{n} jsonl files"),
+        }
     }
 
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {

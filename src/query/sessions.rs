@@ -76,8 +76,14 @@ pub fn list(
         g.row.last_ts = g.row.last_ts.max(r.ts);
     }
     let mut titles: HashMap<(String, String), String> = HashMap::new();
-    let mut st = conn.prepare("SELECT vendor, session_id, title FROM sessions WHERE title IS NOT NULL")?;
-    for t in st.query_map([], |r| Ok(((r.get::<_, String>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
+    let mut st =
+        conn.prepare("SELECT vendor, session_id, title FROM sessions WHERE title IS NOT NULL")?;
+    for t in st.query_map([], |r| {
+        Ok((
+            (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+            r.get::<_, String>(2)?,
+        ))
+    })? {
         let (k, v) = t?;
         titles.insert(k, v);
     }
@@ -95,7 +101,10 @@ pub fn list(
         })
         .collect();
     out.sort_by(|a, b| {
-        b.priced_cost.total_cmp(&a.priced_cost).then_with(|| b.last_ts.cmp(&a.last_ts)).then_with(|| a.session_id.cmp(&b.session_id))
+        b.priced_cost
+            .total_cmp(&a.priced_cost)
+            .then_with(|| b.last_ts.cmp(&a.last_ts))
+            .then_with(|| a.session_id.cmp(&b.session_id))
     });
     out.truncate(limit);
     Ok(out)
@@ -110,9 +119,20 @@ pub struct Timeline {
     pub unpriced_models: Vec<String>,
 }
 
-pub fn timeline_detail(conn: &Connection, prices: &PriceTable, vendor: &str, session_id: &str) -> anyhow::Result<Timeline> {
-    let args = [Value::Text(vendor.to_string()), Value::Text(session_id.to_string())];
-    let mut t = Timeline { points: vec![], unpriced_models: vec![] };
+pub fn timeline_detail(
+    conn: &Connection,
+    prices: &PriceTable,
+    vendor: &str,
+    session_id: &str,
+) -> anyhow::Result<Timeline> {
+    let args = [
+        Value::Text(vendor.to_string()),
+        Value::Text(session_id.to_string()),
+    ];
+    let mut t = Timeline {
+        points: vec![],
+        unpriced_models: vec![],
+    };
     let mut sum = 0.0;
     for r in load_rows(conn, prices, " WHERE vendor = ? AND session_id = ?", &args)? {
         match r.cost {
@@ -127,6 +147,11 @@ pub fn timeline_detail(conn: &Connection, prices: &PriceTable, vendor: &str, ses
 
 /// Cumulative cost curve of one session. Unpriced rows add 0; use
 /// [`timeline_detail`] to learn whether that happened.
-pub fn timeline(conn: &Connection, prices: &PriceTable, vendor: &str, session_id: &str) -> anyhow::Result<Vec<(i64, f64)>> {
+pub fn timeline(
+    conn: &Connection,
+    prices: &PriceTable,
+    vendor: &str,
+    session_id: &str,
+) -> anyhow::Result<Vec<(i64, f64)>> {
     Ok(timeline_detail(conn, prices, vendor, session_id)?.points)
 }

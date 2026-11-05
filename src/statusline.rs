@@ -29,7 +29,10 @@ struct Window {
 }
 
 fn window(v: &Value) -> Option<Window> {
-    Some(Window { used: v["used_percentage"].as_f64()?, resets_at: v["resets_at"].as_i64() })
+    Some(Window {
+        used: v["used_percentage"].as_f64()?,
+        resets_at: v["resets_at"].as_i64(),
+    })
 }
 
 fn kill_group(child: &mut Child) {
@@ -50,8 +53,15 @@ fn run_wrapped(cmd: Command, input: &[u8]) -> Vec<u8> {
 
 /// Run `cmd` (in its own process group) with `input` on stdin within `timeout`.
 /// Returns its stdout, or `None` if it could not be spawned or had to be killed.
-pub(crate) fn run_with_timeout(mut cmd: Command, input: &[u8], timeout: Duration) -> Option<Vec<u8>> {
-    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
+pub(crate) fn run_with_timeout(
+    mut cmd: Command,
+    input: &[u8],
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
     let mut child = cmd.spawn().ok()?;
     let deadline = Instant::now() + timeout;
     if let Some(mut si) = child.stdin.take() {
@@ -86,17 +96,28 @@ pub(crate) fn run_with_timeout(mut cmd: Command, input: &[u8], timeout: Duration
     Some(out.unwrap_or_default())
 }
 
-fn write_snapshot(paths: &Paths, account: &str, five: Option<Window>, seven: Option<Window>) -> anyhow::Result<()> {
+fn write_snapshot(
+    paths: &Paths,
+    account: &str,
+    five: Option<Window>,
+    seven: Option<Window>,
+) -> anyhow::Result<()> {
     let dir = paths.snapshots_dir();
     std::fs::create_dir_all(&dir)?;
     let now = chrono::Utc::now();
-    let w = |w: Option<Window>| w.map(|w| serde_json::json!({"used_percent": w.used, "resets_at": w.resets_at}));
+    let w = |w: Option<Window>| {
+        w.map(|w| serde_json::json!({"used_percent": w.used, "resets_at": w.resets_at}))
+    };
     let body = serde_json::json!({
         "account": account, "measured_at": now.timestamp(),
         "five_hour": w(five), "seven_day": w(seven),
     });
     // one file per account per UTC minute, overwritten in place: bounded growth, no read_dir
-    let name = format!("claude-{}-{}.json", crate::model::sha8(account), now.format("%Y%m%d%H%M"));
+    let name = format!(
+        "claude-{}-{}.json",
+        crate::model::sha8(account),
+        now.format("%Y%m%d%H%M")
+    );
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     std::fs::write(&tmp, body.to_string())?;
     std::fs::rename(&tmp, dir.join(name))?;
@@ -106,7 +127,8 @@ fn write_snapshot(paths: &Paths, account: &str, five: Option<Window>, seven: Opt
 fn today_cost(paths: &Paths) -> Option<String> {
     let t = std::fs::read_to_string(paths.data_dir().join("today.txt")).ok()?;
     let (date, amount) = t.trim().split_once(' ')?;
-    (date == chrono::Local::now().format("%Y-%m-%d").to_string() && !amount.is_empty()).then(|| amount.to_string())
+    (date == chrono::Local::now().format("%Y-%m-%d").to_string() && !amount.is_empty())
+        .then(|| amount.to_string())
 }
 
 fn summary(paths: Option<&Paths>, five: Option<Window>, seven: Option<Window>) -> String {
@@ -155,7 +177,12 @@ pub fn run(args: &Args, paths: Option<&Paths>) {
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(&stdout);
 
-    let limits = serde_json::from_slice::<Value>(&input).ok().map(|v| (window(&v["rate_limits"]["five_hour"]), window(&v["rate_limits"]["seven_day"])));
+    let limits = serde_json::from_slice::<Value>(&input).ok().map(|v| {
+        (
+            window(&v["rate_limits"]["five_hour"]),
+            window(&v["rate_limits"]["seven_day"]),
+        )
+    });
     let (five, seven) = limits.unwrap_or_default();
     if (five.is_some() || seven.is_some())
         && let Some(p) = paths
@@ -163,8 +190,16 @@ pub fn run(args: &Args, paths: Option<&Paths>) {
         let account = args
             .account
             .clone()
-            .or_else(|| std::env::var("AGENT_USAGE_ACCOUNT").ok().filter(|a| !a.is_empty()))
-            .unwrap_or_else(|| crate::config::Config::load(p).map(|c| c.claude_account).unwrap_or_else(|_| "default".into()));
+            .or_else(|| {
+                std::env::var("AGENT_USAGE_ACCOUNT")
+                    .ok()
+                    .filter(|a| !a.is_empty())
+            })
+            .unwrap_or_else(|| {
+                crate::config::Config::load(p)
+                    .map(|c| c.claude_account)
+                    .unwrap_or_else(|_| "default".into())
+            });
         let _ = write_snapshot(p, &account, five, seven);
     }
     if args.show {
@@ -182,7 +217,12 @@ pub fn run(args: &Args, paths: Option<&Paths>) {
 fn write_executable_atomic(path: &Path, content: &str) -> anyhow::Result<()> {
     let tmp = path.with_extension(format!("sh.{}.tmp", std::process::id()));
     {
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o755).open(&tmp)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o755)
+            .open(&tmp)?;
         f.write_all(content.as_bytes())?;
     }
     std::fs::rename(&tmp, path)?;
@@ -204,10 +244,15 @@ pub fn print_snippet(paths: &Paths) -> String {
         }
         Some(cmd) => {
             let dir = paths.data_dir();
-            match std::fs::create_dir_all(&dir).and_then(|_| write_executable_atomic(&dir.join(WRAPPED_FILE), &cmd).map_err(std::io::Error::other)) {
+            match std::fs::create_dir_all(&dir).and_then(|_| {
+                write_executable_atomic(&dir.join(WRAPPED_FILE), &cmd)
+                    .map_err(std::io::Error::other)
+            }) {
                 Ok(()) => wrapped_command(),
                 Err(e) => {
-                    note.push_str(&format!("could not save the existing command ({e}); snippet has no --wrap-file.\n"));
+                    note.push_str(&format!(
+                        "could not save the existing command ({e}); snippet has no --wrap-file.\n"
+                    ));
                     "agent-usage statusline --show".to_string()
                 }
             }

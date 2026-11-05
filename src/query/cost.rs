@@ -3,8 +3,8 @@ use crate::pricing::PriceTable;
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
-use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Totals {
@@ -30,8 +30,15 @@ pub fn totals(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Res
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params_from_iter(args.iter()), |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?,
-            r.get::<_, i64>(4)?, r.get::<_, i64>(5)?, r.get::<_, i64>(6)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, i64>(6)?,
+        ))
     })?;
     for row in rows {
         let (model, n, i, o, cr, w5, w1) = row?;
@@ -47,7 +54,8 @@ pub fn totals(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Res
         t.cache_write += w5 + w1;
     }
     let sql = format!("SELECT count(DISTINCT vendor || '|' || session_id) FROM usage{wh}");
-    t.sessions = conn.query_row(&sql, params_from_iter(args.iter()), |r| r.get::<_, i64>(0))? as u64;
+    t.sessions =
+        conn.query_row(&sql, params_from_iter(args.iter()), |r| r.get::<_, i64>(0))? as u64;
     Ok(t)
 }
 
@@ -70,7 +78,12 @@ pub(crate) struct Row {
     pub cost: Option<f64>,
 }
 
-pub(crate) fn load_rows(conn: &Connection, prices: &PriceTable, wh: &str, args: &[Value]) -> anyhow::Result<Vec<Row>> {
+pub(crate) fn load_rows(
+    conn: &Connection,
+    prices: &PriceTable,
+    wh: &str,
+    args: &[Value],
+) -> anyhow::Result<Vec<Row>> {
     let sql = format!(
         "SELECT vendor, account, session_id, project, ts, day, model, input, output, cache_read,
                 cache_write_5m, cache_write_1h, sidechain
@@ -78,7 +91,10 @@ pub(crate) fn load_rows(conn: &Connection, prices: &PriceTable, wh: &str, args: 
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params_from_iter(args.iter()), |r| {
-        let n = |i: usize| r.get::<_, Option<i64>>(i).map(|v| v.unwrap_or(0).max(0) as u64);
+        let n = |i: usize| {
+            r.get::<_, Option<i64>>(i)
+                .map(|v| v.unwrap_or(0).max(0) as u64)
+        };
         let text = |i: usize| r.get::<_, Option<String>>(i).map(Option::unwrap_or_default);
         let model = text(6)?;
         let (input, output, cache_read, w5, w1) = (n(7)?, n(8)?, n(9)?, n(10)?, n(11)?);
@@ -200,24 +216,30 @@ pub struct ModelRow {
 }
 
 /// Grouped by (model, vendor); sorted by cost descending, unpriced last.
-pub fn by_model(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Vec<ModelRow>> {
+pub fn by_model(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<ModelRow>> {
     let mut m: BTreeMap<(String, String), (ModelRow, Acc)> = BTreeMap::new();
     for r in load(conn, prices, f)? {
-        let (row, acc) = m.entry((r.model.clone(), r.vendor.clone())).or_insert_with(|| {
-            (
-                ModelRow {
-                    model: r.model.clone(),
-                    vendor: r.vendor.clone(),
-                    cost: None,
-                    messages: 0,
-                    input: 0,
-                    output: 0,
-                    cache_read: 0,
-                    cache_write: 0,
-                },
-                Acc::default(),
-            )
-        });
+        let (row, acc) = m
+            .entry((r.model.clone(), r.vendor.clone()))
+            .or_insert_with(|| {
+                (
+                    ModelRow {
+                        model: r.model.clone(),
+                        vendor: r.vendor.clone(),
+                        cost: None,
+                        messages: 0,
+                        input: 0,
+                        output: 0,
+                        cache_read: 0,
+                        cache_write: 0,
+                    },
+                    Acc::default(),
+                )
+            });
         acc.add(r.cost);
         row.messages += 1;
         row.input += r.input;
@@ -229,7 +251,9 @@ pub fn by_model(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::R
     for (row, acc) in &mut v {
         row.cost = acc.cost();
     }
-    v.sort_by(|a, b| by_priced_desc(a.1.priced, b.1.priced).then_with(|| a.0.model.cmp(&b.0.model)));
+    v.sort_by(|a, b| {
+        by_priced_desc(a.1.priced, b.1.priced).then_with(|| a.0.model.cmp(&b.0.model))
+    });
     Ok(v.into_iter().map(|(r, _)| r).collect())
 }
 
@@ -245,7 +269,11 @@ pub struct ProjectRow {
 }
 
 /// Sorted by `priced_cost` descending (project name breaks ties).
-pub fn by_project(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Vec<ProjectRow>> {
+pub fn by_project(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<ProjectRow>> {
     type Group = (Acc, BTreeSet<(String, String)>, u64);
     let mut m: BTreeMap<String, Group> = BTreeMap::new();
     for r in load(conn, prices, f)? {
@@ -264,7 +292,9 @@ pub fn by_project(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow:
             messages: n,
         })
         .collect();
-    v.sort_by(|a, b| by_priced_desc(a.priced_cost, b.priced_cost).then_with(|| a.project.cmp(&b.project)));
+    v.sort_by(|a, b| {
+        by_priced_desc(a.priced_cost, b.priced_cost).then_with(|| a.project.cmp(&b.project))
+    });
     Ok(v)
 }
 
@@ -277,7 +307,11 @@ pub struct Efficiency {
     pub subagent_cost_share: f64,
 }
 
-pub fn efficiency(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Efficiency> {
+pub fn efficiency(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Efficiency> {
     let (mut input, mut cache_read, mut total, mut side) = (0u64, 0u64, 0.0, 0.0);
     for r in load(conn, prices, f)? {
         input += r.input;
@@ -290,7 +324,11 @@ pub fn efficiency(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow:
     }
     let denom = input + cache_read;
     Ok(Efficiency {
-        cache_hit_ratio: if denom == 0 { 0.0 } else { cache_read as f64 / denom as f64 },
+        cache_hit_ratio: if denom == 0 {
+            0.0
+        } else {
+            cache_read as f64 / denom as f64
+        },
         subagent_cost_share: if total == 0.0 { 0.0 } else { side / total },
     })
 }
@@ -306,7 +344,11 @@ pub struct VendorRow {
 }
 
 /// Sorted by `priced_cost` descending.
-pub fn by_vendor(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::Result<Vec<VendorRow>> {
+pub fn by_vendor(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<VendorRow>> {
     let mut m: BTreeMap<String, (Acc, u64)> = BTreeMap::new();
     for r in load(conn, prices, f)? {
         let e = m.entry(r.vendor).or_default();
@@ -315,9 +357,16 @@ pub fn by_vendor(conn: &Connection, prices: &PriceTable, f: &Filter) -> anyhow::
     }
     let mut v: Vec<VendorRow> = m
         .into_iter()
-        .map(|(vendor, (acc, messages))| VendorRow { vendor, cost: acc.cost(), priced_cost: acc.priced, messages })
+        .map(|(vendor, (acc, messages))| VendorRow {
+            vendor,
+            cost: acc.cost(),
+            priced_cost: acc.priced,
+            messages,
+        })
         .collect();
-    v.sort_by(|a, b| by_priced_desc(a.priced_cost, b.priced_cost).then_with(|| a.vendor.cmp(&b.vendor)));
+    v.sort_by(|a, b| {
+        by_priced_desc(a.priced_cost, b.priced_cost).then_with(|| a.vendor.cmp(&b.vendor))
+    });
     Ok(v)
 }
 
@@ -328,10 +377,20 @@ mod tests {
     use chrono::{Duration, Local};
 
     fn day(ago: i64) -> String {
-        (Local::now().date_naive() - Duration::days(ago)).format("%Y-%m-%d").to_string()
+        (Local::now().date_naive() - Duration::days(ago))
+            .format("%Y-%m-%d")
+            .to_string()
     }
 
-    fn ins(c: &Connection, key: &str, vendor: &str, sess: &str, model: &str, day: &str, v: [i64; 5]) {
+    fn ins(
+        c: &Connection,
+        key: &str,
+        vendor: &str,
+        sess: &str,
+        model: &str,
+        day: &str,
+        v: [i64; 5],
+    ) {
         c.execute(
             "INSERT INTO usage(msg_key,vendor,account,session_id,project,ts,day,model,input,output,reasoning,
                cache_read,cache_write_5m,cache_write_1h,sidechain) VALUES(?1,?2,'',?3,'p',0,?4,?5,?6,?7,0,?8,?9,?10,0)",
@@ -343,19 +402,54 @@ mod tests {
     #[test]
     fn totals_cost_unpriced_and_day_window() {
         let d = tempfile::tempdir().unwrap();
-        let prices = PriceTable::load(&Paths { home: d.path().to_path_buf() }).unwrap();
+        let prices = PriceTable::load(&Paths {
+            home: d.path().to_path_buf(),
+        })
+        .unwrap();
         let c = db::open(&d.path().join("t.db")).unwrap();
         // claude-fable-5-1: in $10, out $50, cache_read $0.25 per 1M; write5m x1.25, write1h x2
         // (1000*10 + 2000*50 + 4000*0.25 + 100*10*1.25 + 10*10*2) / 1e6 = 0.11245
-        ins(&c, "a", "claude", "s1", "claude-fable-5-1", &day(0), [1000, 2000, 4000, 100, 10]);
-        ins(&c, "b", "claude", "s1", "no-such-model", &day(0), [5, 6, 7, 8, 9]);
-        ins(&c, "c", "claude", "s2", "claude-fable-5-1", &day(10), [1000, 2000, 4000, 100, 10]);
+        ins(
+            &c,
+            "a",
+            "claude",
+            "s1",
+            "claude-fable-5-1",
+            &day(0),
+            [1000, 2000, 4000, 100, 10],
+        );
+        ins(
+            &c,
+            "b",
+            "claude",
+            "s1",
+            "no-such-model",
+            &day(0),
+            [5, 6, 7, 8, 9],
+        );
+        ins(
+            &c,
+            "c",
+            "claude",
+            "s2",
+            "claude-fable-5-1",
+            &day(10),
+            [1000, 2000, 4000, 100, 10],
+        );
 
         let today = totals(&c, &prices, &Filter::days(1)).unwrap();
         assert!((today.cost - 0.11245).abs() < 1e-9, "{}", today.cost);
         assert_eq!(today.unpriced_models, vec!["no-such-model".to_string()]);
         assert_eq!((today.messages, today.sessions), (2, 1));
-        assert_eq!((today.input, today.output, today.cache_read, today.cache_write), (1005, 2006, 4007, 127));
+        assert_eq!(
+            (
+                today.input,
+                today.output,
+                today.cache_read,
+                today.cache_write
+            ),
+            (1005, 2006, 4007, 127)
+        );
 
         let d7 = totals(&c, &prices, &Filter::days(7)).unwrap();
         assert_eq!(d7.messages, 2);
@@ -363,9 +457,15 @@ mod tests {
         assert!((all.cost - 0.2249).abs() < 1e-9);
         assert_eq!((all.messages, all.sessions), (3, 2));
 
-        let one = Filter { model: Some("claude-fable-5-1".into()), ..Default::default() };
+        let one = Filter {
+            model: Some("claude-fable-5-1".into()),
+            ..Default::default()
+        };
         assert_eq!(totals(&c, &prices, &one).unwrap().messages, 2);
-        let none = Filter { vendor: Some("codex".into()), ..Default::default() };
+        let none = Filter {
+            vendor: Some("codex".into()),
+            ..Default::default()
+        };
         let z = totals(&c, &prices, &none).unwrap();
         assert_eq!((z.messages, z.cost), (0, 0.0));
     }

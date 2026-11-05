@@ -15,11 +15,13 @@ const ETA_MIN_POINTS: usize = 3;
 const ETA_MIN_SPAN_SECS: i64 = 600;
 
 pub const EXPIRED_NOTE: &str = "đã reset, chờ số mới";
-pub const NO_DATA_NOTE: &str = "Chưa có dữ liệu hạn mức — chạy `agent-usage statusline --print-snippet`";
+pub const NO_DATA_NOTE: &str =
+    "Chưa có dữ liệu hạn mức — chạy `agent-usage statusline --print-snippet`";
 pub const UNKNOWN_ACCOUNT_LABEL: &str = "log cũ không phân biệt tài khoản";
 const STALE_ETA_NOTE: &str = "số đo đã cũ, không tính ETA";
-const MIXED_REASON:&str = "số liệu lẫn tài khoản hoặc nhiễu";
-const MIXED_WARNING: &str = "% đã dùng giảm trong cùng một chu kỳ — số liệu lẫn tài khoản hoặc nhiễu, không tính ETA";
+const MIXED_REASON: &str = "số liệu lẫn tài khoản hoặc nhiễu";
+const MIXED_WARNING: &str =
+    "% đã dùng giảm trong cùng một chu kỳ — số liệu lẫn tài khoản hoặc nhiễu, không tính ETA";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LimitCard {
@@ -81,7 +83,10 @@ pub fn account_label(cfg: &Config, vendor: &str, account: &str) -> String {
 }
 
 fn vendor_rank(v: &str) -> usize {
-    ["claude", "codex", "opencode", "agy"].iter().position(|x| *x == v).unwrap_or(9)
+    ["claude", "codex", "opencode", "agy"]
+        .iter()
+        .position(|x| *x == v)
+        .unwrap_or(9)
 }
 
 /// The newest measurement per `(vendor, account, scope)`, Claude first. A
@@ -126,7 +131,9 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
             match eta(&points, r) {
                 // an old trend is not a forecast (it may even point into the past)
                 EtaResult::At(_) if c.stale => c.eta_note = STALE_ETA_NOTE.to_string(),
-                EtaResult::At(t) if t < now => c.eta_note = "đã qua thời điểm dự kiến, chờ số mới".to_string(),
+                EtaResult::At(t) if t < now => {
+                    c.eta_note = "đã qua thời điểm dự kiến, chờ số mới".to_string()
+                }
                 EtaResult::At(t) => c.eta = Some(t),
                 EtaResult::Unavailable(why) => {
                     if why == MIXED_REASON {
@@ -161,14 +168,28 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
         });
     }
     cards.sort_by(|a, b| {
-        (vendor_rank(&a.vendor), &a.account_label, a.window_minutes, &a.scope)
-            .cmp(&(vendor_rank(&b.vendor), &b.account_label, b.window_minutes, &b.scope))
+        (
+            vendor_rank(&a.vendor),
+            &a.account_label,
+            a.window_minutes,
+            &a.scope,
+        )
+            .cmp(&(
+                vendor_rank(&b.vendor),
+                &b.account_label,
+                b.window_minutes,
+                &b.scope,
+            ))
     });
     Ok(cards)
 }
 
 /// Measurements of `c`'s key in the same reset window, within the ETA lookback before its newest one.
-fn window_points(conn: &Connection, c: &LimitCard, resets_at: i64) -> anyhow::Result<Vec<(i64, f64)>> {
+fn window_points(
+    conn: &Connection,
+    c: &LimitCard,
+    resets_at: i64,
+) -> anyhow::Result<Vec<(i64, f64)>> {
     let mut st = conn.prepare(
         "SELECT measured_at, used_percent FROM limit_snapshots
          WHERE vendor=?1 AND account=?2 AND scope=?3 AND measured_at >= ?4 AND ABS(resets_at - ?5) <= ?6
@@ -176,7 +197,14 @@ fn window_points(conn: &Connection, c: &LimitCard, resets_at: i64) -> anyhow::Re
     )?;
     let v = st
         .query_map(
-            params![c.vendor, c.account, c.scope, c.measured_at - ETA_LOOKBACK_SECS, resets_at, SAME_RESET_SECS],
+            params![
+                c.vendor,
+                c.account,
+                c.scope,
+                c.measured_at - ETA_LOOKBACK_SECS,
+                resets_at,
+                SAME_RESET_SECS
+            ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?
         .collect::<Result<_, _>>()?;
@@ -191,7 +219,9 @@ pub fn eta(points: &[(i64, f64)], resets_at: i64) -> EtaResult {
     let no = |s: &str| EtaResult::Unavailable(s.to_string());
     let mut pts = points.to_vec();
     pts.sort_by_key(|p| p.0);
-    let Some(&(last_t, last_y)) = pts.last() else { return no("chưa có số liệu") };
+    let Some(&(last_t, last_y)) = pts.last() else {
+        return no("chưa có số liệu");
+    };
     pts.retain(|p| p.0 >= last_t - ETA_LOOKBACK_SECS);
     if pts.windows(2).any(|w| w[1].1 < w[0].1) {
         return no(MIXED_REASON);
@@ -210,7 +240,10 @@ pub fn eta(points: &[(i64, f64)], resets_at: i64) -> EtaResult {
     let n = pts.len() as f64;
     let mt = pts.iter().map(|p| (p.0 - t0) as f64).sum::<f64>() / n;
     let my = pts.iter().map(|p| p.1).sum::<f64>() / n;
-    let cov: f64 = pts.iter().map(|p| ((p.0 - t0) as f64 - mt) * (p.1 - my)).sum();
+    let cov: f64 = pts
+        .iter()
+        .map(|p| ((p.0 - t0) as f64 - mt) * (p.1 - my))
+        .sum();
     let var: f64 = pts.iter().map(|p| ((p.0 - t0) as f64 - mt).powi(2)).sum();
     let slope = cov / var;
     if slope <= 0.0 || !slope.is_finite() {
@@ -224,22 +257,40 @@ pub fn eta(points: &[(i64, f64)], resets_at: i64) -> EtaResult {
 }
 
 /// `(measured_at, used %)` for one key since `since`, oldest first.
-pub fn history(conn: &Connection, vendor: &str, account: &str, scope: &str, since: i64) -> anyhow::Result<Vec<(i64, f64)>> {
+pub fn history(
+    conn: &Connection,
+    vendor: &str,
+    account: &str,
+    scope: &str,
+    since: i64,
+) -> anyhow::Result<Vec<(i64, f64)>> {
     let mut st = conn.prepare(
         "SELECT measured_at, used_percent FROM limit_snapshots
          WHERE vendor=?1 AND account=?2 AND scope=?3 AND measured_at >= ?4 ORDER BY measured_at",
     )?;
-    let v = st.query_map(params![vendor, account, scope, since], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    let v = st
+        .query_map(params![vendor, account, scope, since], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<Result<_, _>>()?;
     Ok(v)
 }
 
 /// Distinct reset moments reported by measurements since `since` (jitter collapsed), ascending.
-pub fn resets(conn: &Connection, vendor: &str, account: &str, scope: &str, since: i64) -> anyhow::Result<Vec<i64>> {
+pub fn resets(
+    conn: &Connection,
+    vendor: &str,
+    account: &str,
+    scope: &str,
+    since: i64,
+) -> anyhow::Result<Vec<i64>> {
     let mut st = conn.prepare(
         "SELECT DISTINCT resets_at FROM limit_snapshots
          WHERE vendor=?1 AND account=?2 AND scope=?3 AND measured_at >= ?4 AND resets_at IS NOT NULL ORDER BY resets_at",
     )?;
-    let all: Vec<i64> = st.query_map(params![vendor, account, scope, since], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    let all: Vec<i64> = st
+        .query_map(params![vendor, account, scope, since], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     let mut out: Vec<i64> = vec![];
     for r in all {
         if out.last().is_none_or(|l| r - l > SAME_RESET_SECS) {

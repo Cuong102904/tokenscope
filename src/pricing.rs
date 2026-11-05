@@ -50,7 +50,11 @@ impl PriceTable {
 
     fn parse(text: &str) -> anyhow::Result<PriceTable> {
         let f: File = toml::from_str(text)?;
-        Ok(PriceTable { source: f.source, date: f.date, models: f.models })
+        Ok(PriceTable {
+            source: f.source,
+            date: f.date,
+            models: f.models,
+        })
     }
 
     /// Longest-prefix match on the model name.

@@ -33,7 +33,9 @@ fn resolve(bin: &Path) -> Option<PathBuf> {
         return bin.is_file().then(|| bin.to_path_buf());
     }
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(bin)).find(|p| p.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join(bin))
+        .find(|p| p.is_file())
 }
 
 impl Adapter for AgyAdapter {
@@ -43,8 +45,16 @@ impl Adapter for AgyAdapter {
 
     fn discover(&self, paths: &Paths) -> Discovery {
         let found = resolve(Path::new("agy")).is_some();
-        let logs = if paths.agy_log_dir().is_dir() { "log dir present" } else { "no log dir" };
-        let detail = if found { format!("agy on PATH, {logs}") } else { format!("agy not on PATH, {logs}") };
+        let logs = if paths.agy_log_dir().is_dir() {
+            "log dir present"
+        } else {
+            "no log dir"
+        };
+        let detail = if found {
+            format!("agy on PATH, {logs}")
+        } else {
+            format!("agy not on PATH, {logs}")
+        };
         Discovery { found, detail }
     }
 
@@ -58,12 +68,16 @@ pub fn parse_usage(text: &str, measured_at: i64, account: &str) -> Vec<LimitSnap
     text.lines()
         .filter_map(|line| {
             let f: Vec<&str> = line.split('\t').map(str::trim).collect();
-            let [group, label, pct, reset] = f[..] else { return None };
+            let [group, label, pct, reset] = f[..] else {
+                return None;
+            };
             if label != "Weekly Limit Remaining" || group.is_empty() {
                 return None;
             }
             let remaining: f64 = pct.strip_suffix('%')?.trim().parse().ok()?;
-            let resets_at = chrono::DateTime::parse_from_rfc3339(reset).ok()?.timestamp();
+            let resets_at = chrono::DateTime::parse_from_rfc3339(reset)
+                .ok()?
+                .timestamp();
             Some(LimitSnapshot {
                 vendor: Vendor::Agy,
                 account: account.to_string(),
@@ -92,52 +106,117 @@ fn newest_log(dir: &Path) -> Option<PathBuf> {
 /// sha8 of the email on the last `applyAuthResult: email=` line of the newest
 /// log; "" if none. The raw email never leaves this function.
 pub fn account_hint(log_dir: &Path) -> String {
-    let Some(path) = newest_log(log_dir) else { return String::new() };
-    let Ok(mut f) = safety::open_guarded(&path) else { return String::new() };
+    let Some(path) = newest_log(log_dir) else {
+        return String::new();
+    };
+    let Ok(mut f) = safety::open_guarded(&path) else {
+        return String::new();
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut buf = vec![];
-    if f.seek(SeekFrom::Start(len.saturating_sub(LOG_TAIL_BYTES))).is_err() || f.read_to_end(&mut buf).is_err() {
+    if f.seek(SeekFrom::Start(len.saturating_sub(LOG_TAIL_BYTES)))
+        .is_err()
+        || f.read_to_end(&mut buf).is_err()
+    {
         return String::new();
     }
     let text = String::from_utf8_lossy(&buf);
-    let Some(i) = text.rfind(AUTH_MARKER) else { return String::new() };
-    let email: String = text[i + AUTH_MARKER.len()..].chars().take_while(|c| !c.is_whitespace() && !matches!(c, ',' | ';' | '"' | '\'' | ')')).collect();
-    if email.is_empty() { String::new() } else { sha8(&email) }
+    let Some(i) = text.rfind(AUTH_MARKER) else {
+        return String::new();
+    };
+    let email: String = text[i + AUTH_MARKER.len()..]
+        .chars()
+        .take_while(|c| !c.is_whitespace() && !matches!(c, ',' | ';' | '"' | '\'' | ')'))
+        .collect();
+    if email.is_empty() {
+        String::new()
+    } else {
+        sha8(&email)
+    }
 }
 
 /// Run `agy -p "/usage"` (binary from `$PATH`) unless one ran within 5 minutes.
-pub fn refresh(paths: &Paths, cfg: &Config, conn: &mut Connection) -> anyhow::Result<RefreshOutcome> {
-    refresh_with(paths, cfg, conn, Path::new("agy"), chrono::Utc::now().timestamp())
+pub fn refresh(
+    paths: &Paths,
+    cfg: &Config,
+    conn: &mut Connection,
+) -> anyhow::Result<RefreshOutcome> {
+    refresh_with(
+        paths,
+        cfg,
+        conn,
+        Path::new("agy"),
+        chrono::Utc::now().timestamp(),
+    )
 }
 
 /// `refresh` with an injectable binary and clock (for tests).
-pub fn refresh_with(paths: &Paths, cfg: &Config, conn: &mut Connection, bin: &Path, now: i64) -> anyhow::Result<RefreshOutcome> {
+pub fn refresh_with(
+    paths: &Paths,
+    cfg: &Config,
+    conn: &mut Connection,
+    bin: &Path,
+    now: i64,
+) -> anyhow::Result<RefreshOutcome> {
     refresh_with_timeout(paths, cfg, conn, bin, now, REFRESH_TIMEOUT)
 }
 
-pub fn refresh_with_timeout(paths: &Paths, _cfg: &Config, conn: &mut Connection, bin: &Path, now: i64, timeout: Duration) -> anyhow::Result<RefreshOutcome> {
-    let Some(bin) = resolve(bin) else { return Ok(RefreshOutcome::NotInstalled) };
+pub fn refresh_with_timeout(
+    paths: &Paths,
+    _cfg: &Config,
+    conn: &mut Connection,
+    bin: &Path,
+    now: i64,
+    timeout: Duration,
+) -> anyhow::Result<RefreshOutcome> {
+    let Some(bin) = resolve(bin) else {
+        return Ok(RefreshOutcome::NotInstalled);
+    };
     let last: Option<i64> = conn
-        .query_row("SELECT value FROM kv WHERE key=?1", params![KV_LAST_REFRESH], |r| r.get::<_, String>(0))
+        .query_row(
+            "SELECT value FROM kv WHERE key=?1",
+            params![KV_LAST_REFRESH],
+            |r| r.get::<_, String>(0),
+        )
         .optional()?
         .and_then(|v| v.parse().ok());
     if let Some(last) = last
         && now - last < MIN_INTERVAL_SECS
     {
-        return Ok(RefreshOutcome::Throttled { next_allowed: last + MIN_INTERVAL_SECS });
+        return Ok(RefreshOutcome::Throttled {
+            next_allowed: last + MIN_INTERVAL_SECS,
+        });
     }
     // stamp before running: a failed or timed-out run must not be retried in a tight loop
-    conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)", params![KV_LAST_REFRESH, now.to_string()])?;
+    conn.execute(
+        "INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)",
+        params![KV_LAST_REFRESH, now.to_string()],
+    )?;
     let mut cmd = Command::new(&bin);
     cmd.args(["-p", "/usage"]);
-    let out = crate::statusline::run_with_timeout(cmd, b"", timeout).ok_or_else(|| anyhow::anyhow!("agy /usage failed to start or timed out after {}s", timeout.as_secs()))?;
+    let out = crate::statusline::run_with_timeout(cmd, b"", timeout).ok_or_else(|| {
+        anyhow::anyhow!(
+            "agy /usage failed to start or timed out after {}s",
+            timeout.as_secs()
+        )
+    })?;
     let text = String::from_utf8_lossy(&out);
     let snaps = parse_usage(&text, now, &account_hint(&paths.agy_log_dir()));
     if snaps.is_empty() {
         let head: String = text.chars().take(200).collect();
-        let head = if head.contains("email=") { String::new() } else { head };
+        let head = if head.contains("email=") {
+            String::new()
+        } else {
+            head
+        };
         anyhow::bail!("agy /usage produced no weekly limit lines: {}", head.trim());
     }
-    crate::db::write_batch(conn, &Batch { limits: snaps, ..Default::default() })?;
+    crate::db::write_batch(
+        conn,
+        &Batch {
+            limits: snaps,
+            ..Default::default()
+        },
+    )?;
     Ok(RefreshOutcome::Ran)
 }

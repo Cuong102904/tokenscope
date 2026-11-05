@@ -26,7 +26,12 @@ pub struct ActiveSession {
 /// Sessions written within `cfg.active_minutes` of `now` (epoch seconds), most
 /// recently written first. One row per (vendor, session_id): Claude subagent
 /// files share the parent's id and are folded into it by the adapter.
-pub fn list(conn: &Connection, prices: &PriceTable, cfg: &Config, now: i64) -> anyhow::Result<Vec<ActiveSession>> {
+pub fn list(
+    conn: &Connection,
+    prices: &PriceTable,
+    cfg: &Config,
+    now: i64,
+) -> anyhow::Result<Vec<ActiveSession>> {
     let since = now - cfg.active_minutes.max(0) * 60;
     let mut st = conn.prepare(
         "SELECT vendor, session_id, project, title, last_write FROM sessions
@@ -34,7 +39,13 @@ pub fn list(conn: &Connection, prices: &PriceTable, cfg: &Config, now: i64) -> a
     )?;
     let sessions = st
         .query_map([since], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let hour_ago = now - 3600;
