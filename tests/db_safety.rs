@@ -36,6 +36,19 @@ fn forbidden_paths() {
     }
     assert!(!safety::is_forbidden(Path::new("/h/.claude/projects/a/b.jsonl")));
     assert!(!safety::is_forbidden(Path::new("/h/.codex/multi-auth/quota-cache.json")));
+    assert!(!safety::is_forbidden(Path::new("/h/.claude/projects/-home-u-token-counter/s1.jsonl")));
+    assert!(safety::is_forbidden(Path::new("/h/x/oauth_creds.json")));
+}
+
+#[test]
+fn open_guarded_refuses_symlink_to_forbidden() {
+    let d = tempfile::tempdir().unwrap();
+    let target = d.path().join("auth.json");
+    std::fs::write(&target, "x").unwrap();
+    let link = d.path().join("ok.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let e = safety::open_guarded(&link).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
 }
 
 #[test]
@@ -48,14 +61,16 @@ fn open_guarded_denies() {
 fn upsert_keeps_max_output() {
     let d = tempfile::tempdir().unwrap();
     let mut c = db::open(&d.path().join("x/u.db")).unwrap();
-    for o in [10, 5, 20] {
-        let b = Batch { usage: vec![rec(o)], ..Default::default() };
-        db::write_batch(&mut c, &b).unwrap();
+    let out = |c: &rusqlite::Connection| -> (i64, i64) {
+        c.query_row("SELECT count(*), max(output) FROM usage", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+    };
+    for o in [10, 5] {
+        db::write_batch(&mut c, &Batch { usage: vec![rec(o)], ..Default::default() }).unwrap();
     }
-    let (n, out): (i64, i64) = c
-        .query_row("SELECT count(*), max(output) FROM usage", [], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap();
-    assert_eq!((n, out), (1, 20));
+    assert_eq!(out(&c), (1, 10), "smaller output must not replace");
+    db::write_batch(&mut c, &Batch { usage: vec![rec(20)], ..Default::default() }).unwrap();
+    assert_eq!(out(&c), (1, 20));
 }
 
 #[test]

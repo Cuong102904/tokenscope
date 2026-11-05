@@ -6,9 +6,11 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub fn from_env() -> Paths {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        Paths { home }
+    pub fn from_env() -> anyhow::Result<Paths> {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+        Ok(Paths { home })
     }
     pub fn data_dir(&self) -> PathBuf {
         self.home.join(".agent-usage")
