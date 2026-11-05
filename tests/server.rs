@@ -33,12 +33,20 @@ fn setup() -> (tempfile::TempDir, AppState) {
         .unwrap();
     }
     let prices = PriceTable::load(&paths).unwrap();
-    let st = AppState { paths, prices: Arc::new(prices), cfg: Arc::new(Config::default()) };
+    let st = AppState { paths, prices: Arc::new(prices), cfg: Arc::new(Config::default()), port: 8765 };
     (d, st)
 }
 
 async fn get(st: &AppState, uri: &str) -> (StatusCode, String) {
-    let res = server::router(st.clone()).oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+    get_host(st, uri, Some("127.0.0.1:8765")).await
+}
+
+async fn get_host(st: &AppState, uri: &str, host: Option<&str>) -> (StatusCode, String) {
+    let mut req = Request::get(uri);
+    if let Some(h) = host {
+        req = req.header("host", h);
+    }
+    let res = server::router(st.clone()).oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
     let status = res.status();
     let body = res.into_body().collect().await.unwrap().to_bytes();
     (status, String::from_utf8_lossy(&body).into_owned())
@@ -76,8 +84,24 @@ async fn filters_from_query_string() {
     assert_eq!(v["totals"]["messages"], 1);
     let v = json(&st, "/api/cost?project=%2Fhome%2Fu%2Fproj&model=").await;
     assert_eq!(v["totals"]["messages"], 2);
-    let (s, _) = get(&st, "/api/cost?days=abc").await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
+    for bad in ["abc", "0", "-1", "3651", "4294967295", "99999999999"] {
+        let (s, _) = get(&st, &format!("/api/cost?days={bad}")).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "days={bad}");
+    }
+    assert_eq!(get(&st, "/api/cost?days=3650").await.0, StatusCode::OK);
+    assert_eq!(get(&st, "/api/overview?days=3650").await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn rejects_foreign_host_header() {
+    let (_d, st) = setup();
+    for ok in ["127.0.0.1:8765", "localhost:8765"] {
+        assert_eq!(get_host(&st, "/api/meta", Some(ok)).await.0, StatusCode::OK, "{ok}");
+    }
+    for bad in [Some("evil.example:8765"), Some("127.0.0.1:9999"), Some("localhost"), Some("127.0.0.1"), Some("127.0.0.1.evil:8765"), None] {
+        assert_eq!(get_host(&st, "/api/meta", bad).await.0, StatusCode::FORBIDDEN, "{bad:?}");
+        assert_eq!(get_host(&st, "/", bad).await.0, StatusCode::FORBIDDEN, "{bad:?}");
+    }
 }
 
 #[tokio::test]
@@ -145,7 +169,8 @@ async fn serves_index_without_cdn() {
     let (s, js) = get(&st, "/chart.js").await;
     assert_eq!(s, StatusCode::OK);
     assert!(js.len() > 100_000);
-    let res = server::router(st.clone()).oneshot(Request::get("/app.js").body(Body::empty()).unwrap()).await.unwrap();
+    let req = Request::get("/app.js").header("host", "localhost:8765").body(Body::empty()).unwrap();
+    let res = server::router(st.clone()).oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert!(res.headers()["content-type"].to_str().unwrap().contains("javascript"));
 }
@@ -154,4 +179,18 @@ async fn serves_index_without_cdn() {
 fn binds_loopback_only() {
     assert_eq!(server::bind_addr(8765), "127.0.0.1:8765");
     assert_eq!(server::bind_addr(8799), "127.0.0.1:8799");
+}
+
+#[test]
+fn collector_retries_failed_open() {
+    let d = tempfile::tempdir().unwrap();
+    let paths = Paths { home: d.path().to_path_buf() };
+    // ~/.agent-usage is a plain file: the DB cannot be created
+    std::fs::write(paths.data_dir(), "x").unwrap();
+    let mut c = server::Collector::new(paths.clone(), Config::default());
+    assert!(!c.tick());
+    assert!(!c.tick());
+    std::fs::remove_file(paths.data_dir()).unwrap();
+    assert!(c.tick(), "collector must recover once the DB can be opened");
+    assert!(paths.db().is_file());
 }

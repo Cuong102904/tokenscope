@@ -8,13 +8,15 @@ use crate::db;
 use crate::paths::Paths;
 use crate::pricing::PriceTable;
 use crate::query::{Filter, cost, sessions};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
+use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 const INDEX_HTML: &str = include_str!("../assets/web/index.html");
@@ -27,6 +29,8 @@ pub struct AppState {
     pub paths: Paths,
     pub prices: Arc<PriceTable>,
     pub cfg: Arc<Config>,
+    /// The listening port; only `Host: 127.0.0.1:<port>` / `localhost:<port>` is served.
+    pub port: u16,
 }
 
 /// Always loopback: the dashboard has no auth, so it must never listen on other interfaces.
@@ -44,7 +48,19 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(sessions_api))
         .route("/api/session/{vendor}/{id}/timeline", get(timeline_api))
         .route("/api/meta", get(meta))
+        .layer(middleware::from_fn_with_state(state.clone(), host_guard))
         .with_state(state)
+}
+
+/// DNS-rebinding guard: a page on another origin that resolves to 127.0.0.1
+/// still sends its own Host header, so only our exact loopback hosts are served.
+async fn host_guard(State(st): State<AppState>, req: Request, next: Next) -> Response {
+    let ok = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| h == format!("127.0.0.1:{}", st.port) || h == format!("localhost:{}", st.port));
+    if ok { next.run(req).await } else { (StatusCode::FORBIDDEN, "forbidden host").into_response() }
 }
 
 fn asset(ctype: &'static str, body: &'static str) -> Response {
@@ -52,7 +68,9 @@ fn asset(ctype: &'static str, body: &'static str) -> Response {
 }
 
 /// Query string shared by every API route. Empty values mean "no filter";
-/// `days` is a positive number or `all` (absent = all).
+/// `days` is 1..=[`MAX_DAYS`] or `all` (absent = all).
+const MAX_DAYS: u32 = 3650;
+
 #[derive(Debug, Default, Deserialize)]
 struct Params {
     days: Option<String>,
@@ -68,7 +86,7 @@ impl Params {
         let days = match self.days.as_deref() {
             None | Some("") | Some("all") => None,
             Some(s) => match s.parse::<u32>() {
-                Ok(n) if n > 0 => Some(n),
+                Ok(n) if (1..=MAX_DAYS).contains(&n) => Some(n),
                 _ => return Err(ApiError::BadRequest(format!("bad days: {s}"))),
             },
         };
@@ -191,25 +209,15 @@ pub fn serve(paths: Paths, port: u16) -> anyhow::Result<()> {
     {
         let (paths, cfg) = (paths.clone(), cfg.clone());
         std::thread::spawn(move || {
-            let adapters = collect::default_adapters();
-            let mut conn = match db::open(&paths.db()) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("collector: cannot open database: {e:#}");
-                    return;
-                }
-            };
+            // built on this thread: adapters are not Send
+            let mut c = Collector::new(paths, cfg);
             loop {
-                for s in collect::run_all(&mut conn, &paths, &cfg, &adapters) {
-                    if let Some(e) = s.error {
-                        eprintln!("collector: {}: {e}", s.vendor.as_str());
-                    }
-                }
+                c.tick();
                 std::thread::sleep(every);
             }
         });
     }
-    let state = AppState { paths, prices: Arc::new(prices), cfg: Arc::new(cfg) };
+    let state = AppState { paths, prices: Arc::new(prices), cfg: Arc::new(cfg), port };
     let addr = bind_addr(port);
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {
@@ -218,4 +226,61 @@ pub fn serve(paths: Paths, port: u16) -> anyhow::Result<()> {
         axum::serve(listener, router(state)).await?;
         anyhow::Ok(())
     })
+}
+
+/// Background collection state. [`Collector::tick`] never panics and never
+/// gives up: a failed DB open is retried on the next tick, and a panic inside
+/// `run_all` drops the connection so the next tick starts fresh.
+pub struct Collector {
+    paths: Paths,
+    cfg: Config,
+    adapters: Vec<Box<dyn crate::adapters::Adapter>>,
+    conn: Option<Connection>,
+    open_failing: bool,
+}
+
+impl Collector {
+    pub fn new(paths: Paths, cfg: Config) -> Collector {
+        Collector { paths, cfg, adapters: collect::default_adapters(), conn: None, open_failing: false }
+    }
+
+    /// One collection pass; `true` when `run_all` completed.
+    pub fn tick(&mut self) -> bool {
+        if self.conn.is_none() {
+            match db::open(&self.paths.db()) {
+                Ok(c) => {
+                    if self.open_failing {
+                        eprintln!("collector: database open again");
+                    }
+                    self.conn = Some(c);
+                    self.open_failing = false;
+                }
+                Err(e) => {
+                    // log once per failure streak
+                    if !self.open_failing {
+                        eprintln!("collector: cannot open database (will retry): {e:#}");
+                    }
+                    self.open_failing = true;
+                    return false;
+                }
+            }
+        }
+        let Some(conn) = self.conn.as_mut() else { return false };
+        let (paths, cfg, adapters) = (&self.paths, &self.cfg, &self.adapters);
+        match catch_unwind(AssertUnwindSafe(|| collect::run_all(conn, paths, cfg, adapters))) {
+            Ok(statuses) => {
+                for s in statuses {
+                    if let Some(e) = s.error {
+                        eprintln!("collector: {}: {e}", s.vendor.as_str());
+                    }
+                }
+                true
+            }
+            Err(_) => {
+                eprintln!("collector: panic during collection; reconnecting next time");
+                self.conn = None;
+                false
+            }
+        }
+    }
 }

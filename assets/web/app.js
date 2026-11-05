@@ -7,7 +7,32 @@ const num = v => Number(v).toLocaleString('en-US');
 const pct = v => (v * 100).toLocaleString('en-US', {maximumFractionDigits:1}) + '%';
 // cost: Option<f64> + priced lower bound -> "$1.00" | "≥ $0.50" | "n/a"
 const costText = (cost, priced) => cost != null ? fmtMoney(cost) : (priced > 0 ? '≥ ' + fmtMoney(priced) : 'n/a');
-const base = p => { const s = String(p || '').replace(/\/+$/, ''); return s.slice(s.lastIndexOf('/') + 1) || s || '(không rõ)'; };
+const parts = p => String(p || '').split('/').filter(Boolean);
+const base = p => parts(p).slice(-1)[0] || String(p || '') || '(không rõ)';
+// Display label per project path: the last component, or the shortest
+// distinguishing suffix when several known projects share it ("worktrees/x" vs "DEV/x").
+let projLabels = new Map();
+function buildProjLabels(paths) {
+  const m = new Map();
+  let todo = [...new Set(paths)], k = 1;
+  while (todo.length) {
+    const groups = new Map();
+    for (const p of todo) {
+      const ps = parts(p), key = ps.slice(-k).join('/') || base(p);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    todo = [];
+    for (const [key, g] of groups) {
+      // unique, or nothing left to add: settle on this suffix
+      if (g.length === 1 || g.every(p => parts(p).length <= k)) g.forEach(p => m.set(p, key));
+      else todo.push(...g);
+    }
+    k++;
+  }
+  projLabels = m;
+}
+const projName = p => projLabels.get(p) || base(p);
 const fmtTs = ts => new Date(ts * 1000).toLocaleString('vi-VN', {year:'2-digit', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
 const tickMoney = v => '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits: v < 10 ? 2 : 0});
 
@@ -169,7 +194,7 @@ async function renderCost() {
   const top = d.by_project.slice(0, 10);
   draw('cProject', {
     type: 'bar',
-    data: {labels: top.map(p => base(p.project)), datasets: [{label: 'Chi phí', data: top.map(p => p.priced_cost),
+    data: {labels: top.map(p => projName(p.project)), datasets: [{label: 'Chi phí', data: top.map(p => p.priced_cost),
       backgroundColor: css('--s1'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}]},
     options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       scales: {x: {beginAtZero: true, ticks: {callback: tickMoney}, grid: {color: c.grid}}, y: {grid: {display: false}, ticks: {color: c.ink}}},
@@ -187,7 +212,7 @@ async function renderCost() {
 }
 
 const SESS_COLS = [
-  {key: 'project', label: 'Project', l: true, val: s => base(s.project), cell: s => `<span title="${esc(s.project)}">${esc(base(s.project))}</span>`},
+  {key: 'project', label: 'Project', l: true, val: s => projName(s.project), cell: s => `<span title="${esc(s.project)}">${esc(projName(s.project))}</span>`},
   {key: 'vendor', label: 'Hãng', l: true, val: s => s.vendor},
   {key: 'model', label: 'Model', l: true, val: s => s.models[0] || '', cell: s => esc(s.models.join(', '))},
   {key: 'messages', label: 'Tin nhắn', val: s => s.messages, cell: s => esc(num(s.messages))},
@@ -214,14 +239,17 @@ function renderSessTable() {
       : '<tr><td colspan="8" class="empty">Không có session.</td></tr>') + '</tbody>';
 }
 
+let tlToken = 0;
 async function renderTimeline() {
+  const my = ++tlToken;
   const sel = urlState().session;
   if (!sel) { if (charts.cTimeline) { charts.cTimeline.destroy(); delete charts.cTimeline; } return; }
   const i = sel.indexOf('/');
   const vendor = sel.slice(0, i), id = sel.slice(i + 1);
   const s = sessions.find(x => sessKey(x) === sel);
-  $('tlTitle').textContent = s ? base(s.project) + ' · ' + (s.title || id) : id;
+  $('tlTitle').textContent = s ? projName(s.project) + ' · ' + (s.title || id) : id;
   const t = await getJson('/api/session/' + encodeURIComponent(vendor) + '/' + encodeURIComponent(id) + '/timeline');
+  if (my !== tlToken) return; // a later click (or refresh) owns the chart now
   $('tlNote').hidden = !t.unpriced_models.length;
   $('tlNote').textContent = t.unpriced_models.length ? 'Đường là cận dưới — model chưa có giá: ' + t.unpriced_models.join(', ') : '';
   const c = chartBase();
@@ -257,20 +285,28 @@ async function loadMeta() {
   const st = urlState();
   fillSelect($('vendor'), m.vendors, st.vendor);
   fillSelect($('model'), m.models, st.model);
-  fillSelect($('project'), m.projects, st.project, base);
+  buildProjLabels(m.projects.concat(st.project ? [st.project] : []));
+  fillSelect($('project'), m.projects, st.project, projName);
   $('project').title = st.project || '';
 }
 
 // ---------- router + refresh ----------
 const RENDER = {overview: renderOverview, cost: renderCost, sessions: renderSessions};
-let busy = false;
-async function refresh() {
-  if (busy) return;
-  busy = true;
+let busy = false, dirty = false;
+function showTab() {
   const tab = currentTab();
   document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== tab);
   document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (!RENDER[tab]) $('warn').hidden = true;
+  return tab;
+}
+// The tab switch is immediate; data loads are serialised. A request made while
+// one is in flight is not dropped: it re-runs once the current one finishes.
+async function refresh() {
+  showTab();
+  if (busy) { dirty = true; return; }
+  busy = true;
+  const tab = currentTab();
   $('status').textContent = 'đang tải…';
   try {
     await loadMeta();
@@ -280,6 +316,7 @@ async function refresh() {
     $('status').textContent = 'lỗi tải dữ liệu: ' + e.message;
   } finally {
     busy = false;
+    if (dirty) { dirty = false; refresh(); }
   }
 }
 
