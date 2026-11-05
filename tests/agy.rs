@@ -166,6 +166,7 @@ fn status_refresh_prints_agy_lines() {
         .args(["status", "--refresh"])
         .env("HOME", home.path())
         .env("PATH", path)
+        .env("TZ", "Asia/Ho_Chi_Minh")
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
@@ -174,6 +175,9 @@ fn status_refresh_prints_agy_lines() {
         out.contains("Gemini Models") && out.contains("20%"),
         "{out}"
     );
+    // 2026-11-09T00:00Z is 07:00 in Vietnam: reset times are shown in local time
+    assert!(out.contains("resets 2026-11-09 07:00"), "{out}");
+    assert!(!out.contains("UTC"), "{out}");
 }
 
 fn stamped(conn: &rusqlite::Connection) -> bool {

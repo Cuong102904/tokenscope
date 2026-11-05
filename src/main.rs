@@ -96,7 +96,7 @@ fn agy_rows(conn: &Connection) -> Vec<(String, f64, Option<i64>, i64)> {
     rows.into_iter().flatten().flatten().collect()
 }
 
-/// `agy <scope>: N% used (resets <UTC>)` lines.
+/// `agy <scope>: N% used (resets <local time>)` lines.
 fn print_agy(conn: &Connection, note: Option<&str>) {
     if let Some(n) = note {
         println!("{n}");
@@ -104,7 +104,11 @@ fn print_agy(conn: &Connection, note: Option<&str>) {
     for (scope, used, resets, at) in agy_rows(conn) {
         let fmt = |t: i64| {
             chrono::DateTime::from_timestamp(t, 0)
-                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                .map(|d| {
+                    d.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string()
+                })
                 .unwrap_or_default()
         };
         println!(
