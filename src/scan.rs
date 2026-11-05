@@ -1,4 +1,4 @@
-use crate::safety::open_guarded;
+use crate::safety::{is_forbidden, open_guarded};
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -16,9 +16,8 @@ pub struct FileStamp {
     pub mtime: i64,
 }
 
-/// (size, mtime in nanoseconds since epoch) of an already-opened file.
-fn stat(f: &std::fs::File) -> Result<(i64, i64)> {
-    let m = f.metadata()?;
+/// (size, mtime in nanoseconds since epoch) of a file.
+fn stat(m: &std::fs::Metadata) -> Result<(i64, i64)> {
     let mtime = m
         .modified()?
         .duration_since(UNIX_EPOCH)
@@ -28,7 +27,7 @@ fn stat(f: &std::fs::File) -> Result<(i64, i64)> {
 }
 
 /// Files under `root` with extension `ext` whose (size, mtime) differ from the
-/// `files` table. Never-read files and unreadable files are skipped. Does NOT
+/// `files` table. Never-read files are skipped; unreadable files are still returned. Does NOT
 /// record anything; call `mark_done` after the data was written successfully.
 pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<FileStamp>> {
     if !root.exists() {
@@ -40,8 +39,13 @@ pub fn changed_files(conn: &Connection, root: &Path, ext: &str) -> Result<Vec<Fi
         if !entry.file_type().is_file() || p.extension().is_none_or(|e| e != ext) {
             continue;
         }
-        let Ok(f) = open_guarded(p) else { continue };
-        let Ok((size, mtime)) = stat(&f) else { continue };
+        // only never-read files are skipped; a file we can stat but not open is
+        // still returned so the adapter's read error gets counted
+        if is_forbidden(p) || std::fs::canonicalize(p).ok().as_deref().is_some_and(is_forbidden) {
+            continue;
+        }
+        let Ok(md) = std::fs::metadata(p) else { continue };
+        let Ok((size, mtime)) = stat(&md) else { continue };
         let known: Option<(i64, i64)> = conn
             .query_row(
                 "SELECT size, mtime FROM files WHERE path=?1",

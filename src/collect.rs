@@ -44,11 +44,11 @@ fn run_one(conn: &mut Connection, paths: &Paths, cfg: &Config, ad: &dyn Adapter,
         let batch = ad.collect(&mut ctx)?;
         (batch, std::mem::take(&mut ctx.done_files), ctx.unreadable)
     };
-    st.records = batch.usage.len();
     if unreadable > 0 {
         st.detail = format!("{}, {unreadable} unreadable", st.detail);
     }
     db::write_batch(conn, &batch)?;
+    st.records = batch.usage.len();
     // only after the data is safely written
     scan::mark_done(conn, &done)?;
     Ok(())
@@ -86,14 +86,15 @@ pub fn run_all(conn: &mut Connection, paths: &Paths, cfg: &Config, adapters: &[B
     out
 }
 
-/// `~/.agent-usage/today.txt` holds today's cost (e.g. `$12.00`) for the statusline.
+/// `~/.agent-usage/today.txt` holds today's cost (`<local date> $12.00`, so a reader can ignore a stale day) for the statusline.
 fn write_today(conn: &Connection, paths: &Paths) -> anyhow::Result<()> {
     let prices = PriceTable::load(paths)?;
     let t = cost::totals(conn, &prices, &Filter::days(1))?;
     let dir = paths.data_dir();
     std::fs::create_dir_all(&dir)?;
-    let tmp = dir.join("today.txt.tmp");
-    std::fs::write(&tmp, format!("${:.2}", t.cost))?;
+    let tmp = dir.join(format!("today.txt.{}.tmp", std::process::id()));
+    let date = chrono::Local::now().format("%Y-%m-%d");
+    std::fs::write(&tmp, format!("{date} ${:.2}", t.cost))?;
     std::fs::rename(&tmp, dir.join("today.txt"))?;
     Ok(())
 }

@@ -79,8 +79,77 @@ fn status_prints_totals() {
     let i = out.find("hôm nay $").expect(&out);
     assert!(out[i + "hôm nay $".len()..].chars().next().unwrap().is_ascii_digit());
     let today = std::fs::read_to_string(h.path().join(".agent-usage/today.txt")).unwrap();
-    assert!(today.starts_with('$'));
+    let (date, amt) = today.split_once(' ').unwrap();
+    assert_eq!(date, chrono::Local::now().format("%Y-%m-%d").to_string());
+    assert!(amt.starts_with('$'), "{today}");
     let (_, j) = run(h.path(), &["status", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&j).unwrap();
     assert_eq!(v["all_time"]["messages"], 3);
+}
+
+fn walk(d: &Path) -> Vec<std::path::PathBuf> {
+    let mut v = vec![];
+    for e in std::fs::read_dir(d).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() { v.extend(walk(&p)) } else { v.push(p) }
+    }
+    v
+}
+
+#[test]
+fn unreadable_file_is_counted_and_shown_by_doctor() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = home();
+    let dir = walk(&h.path().join(".claude/projects")).pop().unwrap().parent().unwrap().to_path_buf();
+    let x = dir.join("x.jsonl");
+    std::fs::write(&x, "{}\n").unwrap();
+    std::fs::set_permissions(&x, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&x).is_ok() {
+        return; // running as root: chmod 000 does not block reads
+    }
+    let paths = Paths { home: h.path().to_path_buf() };
+    let mut conn = db::open(&h.path().join("t.db")).unwrap();
+    let st = run_all(&mut conn, &paths, &Config::default(), &[Box::new(ClaudeAdapter)]);
+    assert!(st[0].error.is_none());
+    assert!(st[0].detail.ends_with(", 1 unreadable"), "{}", st[0].detail);
+    assert_eq!(st[0].records, 4);
+    let (_, out) = run(h.path(), &["collect"]);
+    assert!(out.contains("1 unreadable"), "{out}");
+    let (_, out) = run(h.path(), &["doctor"]);
+    assert!(out.lines().find(|l| l.starts_with("claude")).unwrap().contains("1 unreadable"), "{out}");
+}
+
+struct BadWrite;
+impl Adapter for BadWrite {
+    fn vendor(&self) -> Vendor {
+        Vendor::Codex
+    }
+    fn discover(&self, _: &Paths) -> Discovery {
+        Discovery { found: true, detail: "fake".into() }
+    }
+    fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
+        ctx.done_files.push(agent_usage::scan::FileStamp { path: "/x/y.jsonl".into(), size: 1, mtime: 2 });
+        // a write cannot succeed once the table is gone
+        ctx.conn.execute_batch("DROP TABLE usage")?;
+        let mut b = Batch::default();
+        b.usage.push(agent_usage::model::UsageRecord {
+            msg_key: "k".into(), vendor: Vendor::Codex, account: String::new(), session_id: "s".into(),
+            project: String::new(), ts: 0, model: "m".into(), input: 1, output: 1, reasoning: 0,
+            cache_read: 0, cache_write_5m: 0, cache_write_1h: 0, sidechain: false, skill: None, plugin: None,
+        });
+        Ok(b)
+    }
+}
+
+#[test]
+fn files_not_marked_done_when_write_fails() {
+    let h = home();
+    let paths = Paths { home: h.path().to_path_buf() };
+    let mut conn = db::open(&h.path().join("t.db")).unwrap();
+    let adapters: Vec<Box<dyn Adapter>> = vec![Box::new(BadWrite)];
+    let st = run_all(&mut conn, &paths, &Config::default(), &adapters);
+    assert!(st[0].error.is_some());
+    assert_eq!(st[0].records, 0);
+    let n: i64 = conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
 }

@@ -38,10 +38,8 @@ pub fn open(path: &Path) -> Result<Connection> {
         anyhow::bail!("not an agent-usage database: {}", path.display());
     }
     conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
-    conn.execute_batch(SCHEMA)?;
-    if version == 0 {
-        conn.execute_batch("PRAGMA user_version = 1")?;
-    }
+    // schema and version in one transaction: no tables-with-version-0 state
+    conn.execute_batch(&format!("BEGIN IMMEDIATE;{SCHEMA}PRAGMA user_version = 1;COMMIT;"))?;
     Ok(conn)
 }
 

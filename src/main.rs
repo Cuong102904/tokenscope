@@ -106,8 +106,8 @@ fn main() -> anyhow::Result<()> {
                 let last = collect::load_status(&conn, v);
                 let tail = match &last {
                     Some(s) => match &s.error {
-                        Some(e) => format!("ERROR {e}"),
-                        None => format!("ok @ {}", s.last_run),
+                        Some(e) => format!("ERROR {e} (last run: {})", s.detail),
+                        None => format!("ok @ {}: {}", s.last_run, s.detail),
                     },
                     None => "never run".to_string(),
                 };
