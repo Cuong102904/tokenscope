@@ -1,3 +1,8 @@
 target/
 __pycache__/
 .superpowers/
+
+
+# Added by cargo
+
+/target
