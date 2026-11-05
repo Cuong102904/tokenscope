@@ -1,4 +1,5 @@
 pub mod cost;
+pub mod sessions;
 
 use chrono::{Duration, Local};
 use rusqlite::types::Value;

@@ -11,6 +11,10 @@ pub enum Vendor {
 }
 
 impl Vendor {
+    pub fn parse(s: &str) -> Option<Vendor> {
+        [Vendor::Claude, Vendor::Codex, Vendor::OpenCode, Vendor::Agy].into_iter().find(|v| v.as_str() == s)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Vendor::Claude => "claude",
