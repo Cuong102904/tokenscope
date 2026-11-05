@@ -27,16 +27,32 @@ pub fn scope_for(window_minutes: i64) -> String {
     }
 }
 
-/// Name of the directory holding a `/SKILL.md` mentioned in a command line.
-fn skill_in(args: &str) -> Option<String> {
-    let i = args.find("/SKILL.md")?;
-    let head = &args[..i];
-    let start = head.rfind(['/', ' ', '"', '\'', '=', ':']).map_or(0, |p| p + 1);
-    let name = &head[start..];
-    (!name.is_empty()).then(|| name.to_string())
+/// Parent-directory names of every `/SKILL.md` mentioned in `text`.
+fn skills_in(text: &str) -> Vec<String> {
+    let mut out = vec![];
+    for (i, _) in text.match_indices("/SKILL.md") {
+        let head = &text[..i];
+        let start = head.rfind(['/', ' ', '"', '\'', '=', ':', '\\']).map_or(0, |p| p + 1);
+        let name = &head[start..];
+        if !name.is_empty() {
+            out.push(name.to_string());
+        }
+    }
+    out
 }
 
-/// Parse one rollout file. Returns `(session_id, project)` (empty when the file has no session_meta).
+/// (session_id, project, account) from a session_meta payload; the account id is stored only as sha8.
+fn meta(p: &Value) -> (String, String, String) {
+    (
+        s(&p["id"]).unwrap_or_default(),
+        s(&p["cwd"]).unwrap_or_default(),
+        s(&p["creator_account_id"]).map(|a| sha8(&a)).unwrap_or_default(),
+    )
+}
+
+/// Parse one rollout file. Returns `(session_id, project)`; both are empty when the file has no
+/// session_meta. Without a session id token usage is skipped (its key needs the id), while rate
+/// limits, tools and skills are still kept (with session "" and account "").
 pub fn parse_rollout(lines: &[Value], out: &mut Batch) -> (String, String) {
     let (mut session_id, mut project, mut account) = (String::new(), String::new(), String::new());
     let mut model = String::new();
@@ -45,30 +61,20 @@ pub fn parse_rollout(lines: &[Value], out: &mut Batch) -> (String, String) {
         let p = &v["payload"];
         let Some(ts) = ts_of(v) else {
             if v["type"] == "session_meta" {
-                // still need the identity even without a timestamp
-                session_id = s(&p["id"]).unwrap_or_default();
-                project = s(&p["cwd"]).unwrap_or_default();
-                account = s(&p["creator_account_id"]).map(|a| sha8(&a)).unwrap_or_default();
+                (session_id, project, account) = meta(p);
             }
             continue;
         };
         match v["type"].as_str() {
-            Some("session_meta") => {
-                session_id = s(&p["id"]).unwrap_or_default();
-                project = s(&p["cwd"]).unwrap_or_default();
-                account = s(&p["creator_account_id"]).map(|a| sha8(&a)).unwrap_or_default();
-            }
+            Some("session_meta") => (session_id, project, account) = meta(p),
             Some("turn_context") => {
                 if let Some(m) = s(&p["model"]) {
                     model = m;
                 }
             }
             Some("event_msg") if p["type"] == "token_count" => {
-                if session_id.is_empty() {
-                    continue;
-                }
                 let info = &p["info"];
-                if info.is_object() {
+                if info.is_object() && !session_id.is_empty() {
                     let total = u(&info["total_token_usage"]["total_tokens"]);
                     if last_total != Some(total) {
                         last_total = Some(total);
@@ -125,18 +131,30 @@ pub fn parse_rollout(lines: &[Value], out: &mut Batch) -> (String, String) {
                     }
                 }
             }
-            Some("response_item") if p["type"] == "function_call" => {
+            Some("response_item") if matches!(p["type"].as_str(), Some("function_call" | "custom_tool_call")) => {
                 let (Some(name), Some(call_id)) = (s(&p["name"]), s(&p["call_id"])) else { continue };
-                let key = format!("codex:{call_id}");
-                out.tools.push(ToolEvent { key: key.clone(), vendor: Vendor::Codex, session_id: session_id.clone(), ts, tool: name.clone() });
-                let args = match &p["arguments"] {
-                    Value::String(a) => a.clone(),
-                    other => other.to_string(),
+                out.tools.push(ToolEvent {
+                    key: format!("codex:{call_id}"),
+                    vendor: Vendor::Codex,
+                    session_id: session_id.clone(),
+                    ts,
+                    tool: name,
+                });
+                // function_call carries its text in `arguments`, custom_tool_call in `input`
+                let text = match (&p["arguments"], &p["input"]) {
+                    (Value::String(a), _) => a.clone(),
+                    (_, Value::String(i)) => i.clone(),
+                    _ => String::new(),
                 };
-                if name == "exec_command"
-                    && let Some(skill) = skill_in(&args)
-                {
-                    out.skills.push(SkillEvent { key, vendor: Vendor::Codex, session_id: session_id.clone(), ts, skill, kind: "file_read" });
+                for skill in skills_in(&text) {
+                    out.skills.push(SkillEvent {
+                        key: format!("codex:{call_id}:{skill}"),
+                        vendor: Vendor::Codex,
+                        session_id: session_id.clone(),
+                        ts,
+                        skill,
+                        kind: "file_read",
+                    });
                 }
             }
             _ => {}

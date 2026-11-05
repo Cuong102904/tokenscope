@@ -61,7 +61,8 @@ fn codex_fixture() {
     assert_eq!(lim("five_hour"), 40.0); // latest, from the info:null event
     assert_eq!(lim("weekly"), 12.0);
     assert_eq!(n("SELECT count(*) FROM limit_snapshots WHERE scope='five_hour' AND used_percent=37.0"), 1);
-    assert_eq!(n("SELECT count(*) FROM limit_events"), 1);
+    let (ev_scope, ev_reset): (String, i64) = conn.query_row("SELECT scope, resets_at FROM limit_events", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((ev_scope.as_str(), ev_reset), ("primary", 1793000000));
     let (sk, kind): (String, String) = conn.query_row("SELECT skill, kind FROM skill_events", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
     assert_eq!((sk.as_str(), kind.as_str()), ("foo", "file_read"));
     assert_eq!(n("SELECT count(*) FROM tool_events WHERE tool='exec_command'"), 2);
@@ -87,4 +88,41 @@ fn free_plan_monthly_window() {
     let scopes: Vec<_> = b.limits.iter().map(|l| l.scope.as_str()).collect();
     assert_eq!(scopes, ["monthly", "other:window_123m"]);
     assert_eq!(b.limits[0].account, "");
+}
+
+fn call(t: &str, name: &str, field: &str, text: &str, id: &str) -> serde_json::Value {
+    json!({"type":"response_item","timestamp":"2026-11-02T01:00:20Z","payload":{"type":t,"name":name,field:text,"call_id":id}})
+}
+
+#[test]
+fn custom_tool_calls_and_skill_reads() {
+    let lines = vec![
+        json!({"type":"session_meta","timestamp":"2026-11-02T01:00:00Z","payload":{"id":"s","cwd":"/x",
+            "base_instructions":{"text":"see /home/u/.codex/skills/ignored/SKILL.md"}}}),
+        call("custom_tool_call", "exec", "input", "cat /home/u/.codex/plugins/cache/k/k/1.0/skills/verify-implementation/SKILL.md", "c1"),
+        call("custom_tool_call", "apply_patch", "input", "*** Begin Patch\n*** End Patch", "c2"),
+        call("function_call", "exec_command", "arguments", "{\"cmd\":\"cat /a/skills/one/SKILL.md /b/skills/two/SKILL.md\"}", "c3"),
+    ];
+    let mut b = Batch::default();
+    parse_rollout(&lines, &mut b);
+    let tools: Vec<_> = b.tools.iter().map(|t| (t.tool.as_str(), t.key.as_str())).collect();
+    assert_eq!(tools, [("exec", "codex:c1"), ("apply_patch", "codex:c2"), ("exec_command", "codex:c3")]);
+    let skills: Vec<_> = b.skills.iter().map(|s| (s.skill.as_str(), s.key.as_str(), s.kind)).collect();
+    assert_eq!(skills, [
+        ("verify-implementation", "codex:c1:verify-implementation", "file_read"),
+        ("one", "codex:c3:one", "file_read"),
+        ("two", "codex:c3:two", "file_read"),
+    ]);
+}
+
+#[test]
+fn missing_session_meta_keeps_limits() {
+    let lines = vec![json!({"type":"event_msg","timestamp":"2026-11-02T01:00:10Z","payload":{"type":"token_count",
+        "info":{"total_token_usage":{"total_tokens":5},"last_token_usage":{"input_tokens":5}},
+        "rate_limits":{"limit_id":"codex","primary":{"used_percent":5.0,"window_minutes":300,"resets_at":1},"secondary":null}}})];
+    let mut b = Batch::default();
+    let (sid, _) = parse_rollout(&lines, &mut b);
+    assert_eq!(sid, "");
+    assert!(b.usage.is_empty());
+    assert_eq!(b.limits.len(), 1);
 }
