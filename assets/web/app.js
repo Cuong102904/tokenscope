@@ -47,12 +47,15 @@ let sort = {key: 'cost', dir: -1};
 function urlState() {
   const p = new URLSearchParams(location.search);
   const days = p.get('days') || DEFAULT_DAYS;
-  return {days, vendor: p.get('vendor') || '', model: p.get('model') || '', project: p.get('project') || '', session: p.get('s') || ''};
+  return {days, vendor: p.get('vendor') || '', model: p.get('model') || '', project: p.get('project') || '', session: p.get('s') || '',
+    lim: p.get('lim') || '', lr: p.get('lr') || ''};
 }
 function writeUrl(st) {
   const p = new URLSearchParams();
   for (const k of FILTERS) if (st[k]) p.set(k, st[k]);
   if (st.session) p.set('s', st.session);
+  if (st.lim) p.set('lim', st.lim);
+  if (st.lr) p.set('lr', st.lr);
   history.replaceState(null, '', '?' + p + location.hash);
 }
 function setState(patch) { writeUrl({...urlState(), ...patch}); }
@@ -161,9 +164,168 @@ async function renderOverview() {
   ].join('');
   setWarn(d.totals_30d.unpriced_models);
   drawDaily('cOvDaily', d.daily);
-  $('ovLimits').innerHTML = d.limits_mini.length
-    ? d.limits_mini.map(l => `<div>${esc(JSON.stringify(l))}</div>`).join('')
-    : '<div class="empty">Sắp có — xem tab Hạn mức sau khi tính năng này hoàn tất.</div>';
+  renderLimitCards($('ovLimits'), d.limits_mini, true);
+}
+
+// ---------- limits ----------
+const VENDOR_NAME = {claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', agy: 'Antigravity (agy)'};
+const vendorName = v => VENDOR_NAME[v] || v;
+const SCOPE_BASE = {five_hour: '5 giờ', weekly: 'Tuần', seven_day: 'Tuần', monthly: 'Tháng'};
+// "five_hour" -> "5 giờ", "weekly:Gemini" -> "Tuần · Gemini", "x:window_90m" -> "90 phút · x"
+function scopeLabel(scope) {
+  const ps = String(scope).split(':');
+  const i = ps.findIndex(p => SCOPE_BASE[p] || /^window_\d+m$/.test(p));
+  if (i < 0) return String(scope);
+  const b = SCOPE_BASE[ps[i]] || ps[i].slice(7, -1) + ' phút';
+  const rest = ps.filter((_, j) => j !== i).join(':');
+  return rest ? b + ' · ' + rest : b;
+}
+const fmtPct = v => Number(v).toLocaleString('en-US', {maximumFractionDigits: 1}) + '%';
+function dur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  if (sec < 60) return 'dưới 1 phút';
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  if (d) return d + ' ngày' + (h ? ' ' + h + ' giờ' : '');
+  if (h) return h + ' giờ' + (m ? ' ' + m + ' phút' : '');
+  return m + ' phút';
+}
+const nowSec = () => Date.now() / 1000;
+const until = ts => 'còn ' + dur(ts - nowSec());
+const ago = ts => nowSec() - ts < 60 ? 'vừa xong' : dur(nowSec() - ts) + ' trước';
+// bar level: green < 70, amber < 90, red >= 90 (the number is always shown too)
+const level = p => p >= 90 ? 'hi' : p >= 70 ? 'mid' : 'ok';
+const limKey = c => [c.vendor, c.account, c.scope].join('|');
+function splitLimKey(k) { const [vendor, account, ...rest] = k.split('|'); return {vendor, account: account || '', scope: rest.join('|')}; }
+
+function limitCard(c, mini) {
+  if (c.no_data) return `<div class="lcard nodata"><div class="lhead"><span class="sc">${esc(vendorName(c.vendor))}</span></div><div class="lmeta">${esc(c.eta_note)}</div></div>`;
+  const sel = !mini && limKey(c) === urlState().lim;
+  const head = `<div class="lhead"><span class="sc">${esc(scopeLabel(c.scope))}</span>` +
+    `<span class="ac" title="${esc(c.account_label)}">${esc(c.account_label)}</span>` +
+    (c.stale ? '<span class="badge" title="Số đo đã cũ, có thể không còn đúng">CŨ</span>' : '') + '</div>';
+  let body;
+  if (c.expired) {
+    // the last number belongs to the previous window: never show it as current
+    body = `<div class="lval reset">Đã reset, chờ số mới</div><div class="lmeta">Reset lúc ${esc(fmtTs(c.resets_at))} · ${esc(ago(c.resets_at))}</div>`;
+  } else {
+    const p = Math.max(0, Math.min(100, Number(c.used_percent))), lv = level(p);
+    body = `<div class="lval ${lv}">${esc(fmtPct(c.used_percent))} <span class="lmeta">đã dùng</span></div>` +
+      `<div class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(p)}" aria-label="${esc(fmtPct(p) + ' đã dùng')}"><i class="${lv}" style="width:${esc(p)}%"></i></div>` +
+      (c.resets_at != null ? `<div class="lmeta">Reset ${esc(fmtTs(c.resets_at))} · ${esc(until(c.resets_at))}</div>` : '');
+  }
+  const measured = mini
+    ? `<div class="lmeta">đo ${esc(ago(c.measured_at))}</div>`
+    : `<div class="lmeta">Đo lúc ${esc(fmtTs(c.measured_at))} (${esc(c.source)}) · ${esc(ago(c.measured_at))}${c.plan_type ? ' · gói ' + esc(c.plan_type) : ''}</div>`;
+  const eta = mini || c.expired ? '' : `<div class="lmeta">${c.eta != null
+    ? 'Dự kiến chạm 100%: ' + esc(fmtTs(c.eta)) + ' · ' + esc(until(c.eta))
+    : 'Không có ETA: ' + esc(c.eta_note)}</div>`;
+  const warn = c.warning ? `<div class="lwarn">Cảnh báo: ${esc(c.warning)}</div>` : '';
+  return `<div class="lcard${sel ? ' sel' : ''}" role="button" tabindex="0" data-k="${esc(limKey(c))}">${head}${body}${measured}${eta}${warn}</div>`;
+}
+
+function renderLimitCards(el, cards, mini) {
+  const groups = new Map();
+  for (const c of cards) { if (!groups.has(c.vendor)) groups.set(c.vendor, []); groups.get(c.vendor).push(c); }
+  el.innerHTML = groups.size ? [...groups].map(([v, cs]) =>
+    `<div class="lim-group"><h3>${esc(vendorName(v))}</h3><div class="lim-grid${mini ? ' mini' : ''}">${cs.map(c => limitCard(c, mini)).join('')}</div></div>`).join('')
+    : '<div class="empty">Chưa có dữ liệu hạn mức.</div>';
+}
+
+let limCards = [];
+async function renderLimits(data) {
+  const d = data || await getJson('/api/limits');
+  limCards = d.cards;
+  renderLimitCards($('limCards'), d.cards, false);
+  $('tLimEvents').innerHTML = '<thead><tr>' + ['Thời điểm', 'Hãng', 'Tài khoản', 'Phạm vi', 'Reset lúc']
+    .map(h => `<th class="l">${esc(h)}</th>`).join('') + '</tr></thead><tbody>' +
+    (d.events.length ? d.events.map(e => `<tr><td class="l">${esc(fmtTs(e.ts))}</td><td class="l">${esc(vendorName(e.vendor))}</td>` +
+      `<td class="l">${esc(e.account_label)}</td><td class="l">${esc(scopeLabel(e.scope))}</td><td class="l">${esc(e.resets_at != null ? fmtTs(e.resets_at) : '—')}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="empty">Không có lần chạm giới hạn nào trong 30 ngày.</td></tr>') + '</tbody>';
+  await renderLimitChart();
+}
+
+// Chart.js plugin: dashed vertical line + "reset" label at each x (ms)
+const resetLines = (xs, color) => ({id: 'resetLines', afterDatasetsDraw(ch) {
+  const {ctx, chartArea: a, scales: {x}} = ch;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.font = '11px ' + Chart.defaults.font.family;
+  for (const v of xs) {
+    const px = x.getPixelForValue(v);
+    if (px < a.left || px > a.right) continue;
+    ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+    ctx.fillText('reset', px + 3, a.top + 10);
+  }
+  ctx.restore();
+}});
+
+let limToken = 0;
+async function renderLimitChart() {
+  const my = ++limToken;
+  const st = urlState();
+  const hours = st.lr === '168' ? 168 : 24;
+  document.querySelectorAll('#limRange button').forEach(b => b.classList.toggle('on', b.dataset.h === String(hours)));
+  if (!st.lim) {
+    $('limChartTitle').textContent = 'bấm một thẻ ở trên';
+    if (charts.cLimit) { charts.cLimit.destroy(); delete charts.cLimit; }
+    return;
+  }
+  const k = splitLimKey(st.lim);
+  const card = limCards.find(c => limKey(c) === st.lim);
+  const title = vendorName(k.vendor) + ' · ' + scopeLabel(k.scope) + ' · ' + (card ? card.account_label : k.account || '—');
+  const h = await getJson('/api/limits/history?' + new URLSearchParams({...k, hours}));
+  if (my !== limToken) return; // a later click owns the chart now
+  $('limChartTitle').textContent = title + (h.points.length ? '' : ' — không có số đo trong khoảng này');
+  const now = Date.now(), from = now - hours * 3600e3;
+  const c = chartBase(), col = vendorColor(k.vendor);
+  draw('cLimit', {
+    type: 'line',
+    data: {datasets: [{label: '% đã dùng', data: h.points.map(([t, v]) => ({x: t * 1000, y: v})),
+      borderColor: col, backgroundColor: col, borderWidth: 2, pointRadius: h.points.length < 60 ? 2 : 0, pointHoverRadius: 5, tension: 0}]},
+    options: {responsive: true, maintainAspectRatio: false, interaction: {mode: 'nearest', axis: 'x', intersect: false},
+      scales: {
+        x: {type: 'linear', min: from, max: now, ticks: {maxTicksLimit: 6, callback: v => fmtTs(v / 1000)}, grid: {display: false}},
+        y: {min: 0, max: 100, ticks: {callback: v => v + '%'}, grid: {color: c.grid}},
+      },
+      plugins: {legend: {display: false}, tooltip: {callbacks: {title: items => fmtTs(items[0].parsed.x / 1000), label: it => fmtPct(it.parsed.y) + ' đã dùng'}}}},
+    plugins: [resetLines(h.resets.map(r => r * 1000), c.mute)],
+  });
+}
+
+function agyText(r) {
+  if (!r) return '';
+  switch (r.status) {
+    case 'ran': return 'Đã làm mới agy lúc ' + new Date().toLocaleTimeString('vi-VN') + '.';
+    case 'throttled': return 'agy vừa chạy gần đây (tối đa 1 lần / 5 phút) — thử lại lúc ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
+    case 'not_installed': return 'Không tìm thấy lệnh agy trong PATH.';
+    default: return 'Lỗi làm mới agy: ' + (r.message || r.status);
+  }
+}
+async function refreshAgy() {
+  const b = $('agyRefresh');
+  b.disabled = true;
+  $('agyMsg').textContent = 'đang chạy agy /usage… (tối đa 30 giây)';
+  try {
+    const r = await fetch('/api/limits?refresh=agy', {cache: 'no-store', headers: {'X-Agent-Usage': '1'}});
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
+    const d = await r.json();
+    $('agyMsg').textContent = agyText(d.refresh);
+    if (currentTab() === 'limits') await renderLimits(d);
+  } catch (e) {
+    $('agyMsg').textContent = 'Lỗi làm mới agy: ' + e.message;
+  } finally {
+    b.disabled = false;
+  }
+}
+function selectLimit(k) {
+  setState({lim: k});
+  document.querySelectorAll('#limCards .lcard').forEach(el => el.classList.toggle('sel', el.dataset.k === k));
+  renderLimitChart().catch(e => { $('status').textContent = 'lỗi tải dữ liệu: ' + e.message; });
+}
+function onCardActivate(el, handler) {
+  const go = ev => { const card = ev.target.closest('.lcard[data-k]'); if (card) handler(card.dataset.k); };
+  el.addEventListener('click', go);
+  el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(ev); } });
 }
 
 async function renderCost() {
@@ -291,7 +453,7 @@ async function loadMeta() {
 }
 
 // ---------- router + refresh ----------
-const RENDER = {overview: renderOverview, cost: renderCost, sessions: renderSessions};
+const RENDER = {overview: renderOverview, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions};
 let busy = false, dirty = false;
 function showTab() {
   const tab = currentTab();
@@ -341,6 +503,16 @@ function init() {
     renderSessTable();
     renderTimeline().catch(e => { $('status').textContent = 'lỗi tải dữ liệu: ' + e.message; });
   });
+  onCardActivate($('limCards'), selectLimit);
+  // overview mini cards open the limits tab with that card's chart
+  onCardActivate($('ovLimits'), k => { setState({lim: k}); location.hash = '#limits'; });
+  $('limRange').addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-h]');
+    if (!b) return;
+    setState({lr: b.dataset.h === '168' ? '168' : ''});
+    renderLimitChart().catch(e => { $('status').textContent = 'lỗi tải dữ liệu: ' + e.message; });
+  });
+  $('agyRefresh').addEventListener('click', refreshAgy);
   // collapsible cards, remembered per browser
   let collapsed = new Set();
   try { collapsed = new Set(JSON.parse(localStorage.getItem('au-collapsed') || '[]')); } catch (e) { /* storage unavailable */ }

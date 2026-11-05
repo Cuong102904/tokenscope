@@ -112,7 +112,9 @@ async fn api_overview_shape() {
     assert_eq!(v["totals_7d"]["messages"], 3);
     assert_eq!(v["totals_30d"]["messages"], 3);
     assert_eq!(v["active_count"], 0);
-    assert_eq!(v["limits_mini"], serde_json::json!([]));
+    // no limit data: only the Claude "no data" placeholder card
+    assert_eq!(v["limits_mini"].as_array().unwrap().len(), 1);
+    assert_eq!(v["limits_mini"][0]["no_data"], true);
     assert_eq!(v["daily"].as_array().unwrap().len(), 30);
     // vendor filter still applies to the fixed windows
     let v = json(&st, "/api/overview?vendor=codex").await;
@@ -193,4 +195,99 @@ fn collector_retries_failed_open() {
     std::fs::remove_file(paths.data_dir()).unwrap();
     assert!(c.tick(), "collector must recover once the DB can be opened");
     assert!(paths.db().is_file());
+}
+
+async fn get_with(st: &AppState, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, String) {
+    let mut req = Request::get(uri).header("host", "127.0.0.1:8765");
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let res = server::router(st.clone()).oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+fn seed_limits(st: &AppState) -> i64 {
+    let now = chrono::Utc::now().timestamp();
+    let c = db::open(&st.paths.db()).unwrap();
+    for (i, used) in [10.0, 20.0, 30.0].iter().enumerate() {
+        c.execute(
+            "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source)
+             VALUES('claude','a','five_hour',300,?1,?2,NULL,?3,'statusline')",
+            rusqlite::params![used, now + 4 * 3600, now - 1200 + 600 * i as i64],
+        )
+        .unwrap();
+    }
+    c.execute(
+        "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source)
+         VALUES('codex','','weekly',10080,50,?1,'plus',?2,'codex-log')",
+        rusqlite::params![now - 3600, now - 3 * 86400],
+    )
+    .unwrap();
+    c.execute("INSERT INTO limit_events(vendor,account,ts,scope,resets_at) VALUES('codex','',?1,'primary',?2)", rusqlite::params![now - 86400, now]).unwrap();
+    now
+}
+
+#[tokio::test]
+async fn api_limits_shape() {
+    let (_d, st) = setup();
+    seed_limits(&st);
+    let v = json(&st, "/api/limits").await;
+    let cards = v["cards"].as_array().unwrap();
+    assert_eq!(cards.len(), 2, "{v}");
+    assert_eq!(cards[0]["vendor"], "claude");
+    assert_eq!(cards[0]["used_percent"], 30.0);
+    assert_eq!(cards[0]["stale"], false);
+    assert!(cards[0]["eta"].is_i64(), "{}", cards[0]);
+    assert_eq!(cards[1]["expired"], true);
+    assert_eq!(cards[1]["stale"], true);
+    assert_eq!(cards[1]["account_label"], "log cũ không phân biệt tài khoản");
+    assert_eq!(v["events"].as_array().unwrap().len(), 1);
+    assert!(v.get("refresh").is_none());
+    let o = json(&st, "/api/overview").await;
+    assert_eq!(o["limits_mini"], v["cards"]);
+}
+
+#[tokio::test]
+async fn api_limits_history() {
+    let (_d, st) = setup();
+    let now = seed_limits(&st);
+    let v = json(&st, "/api/limits/history?vendor=claude&account=a&scope=five_hour&hours=24").await;
+    assert_eq!(v["points"].as_array().unwrap().len(), 3);
+    assert_eq!(v["points"][2], serde_json::json!([now, 30.0]));
+    assert_eq!(v["resets"], serde_json::json!([now + 4 * 3600]));
+    // empty account is a valid key (old Codex logs)
+    let v = json(&st, "/api/limits/history?vendor=codex&account=&scope=weekly&hours=168").await;
+    assert_eq!(v["points"].as_array().unwrap().len(), 1);
+    for bad in ["hours=0", "hours=2161", "hours=x", ""] {
+        let (s, _) = get(&st, &format!("/api/limits/history?vendor=claude&account=a&{bad}")).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn api_limits_refresh_agy() {
+    let (_d, st) = setup();
+    seed_limits(&st);
+    // a recent refresh stamp: the real `agy` (if installed) must never run in tests
+    let now = chrono::Utc::now().timestamp();
+    db::open(&st.paths.db())
+        .unwrap()
+        .execute("INSERT OR REPLACE INTO kv(key,value) VALUES('agy:last_refresh',?1)", [now.to_string()])
+        .unwrap();
+    // without the same-origin header (e.g. an <img> on another site): refused
+    let (s, _) = get(&st, "/api/limits?refresh=agy").await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, b) = get_with(&st, "/api/limits?refresh=agy", &[("x-agent-usage", "1")]).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let v: Value = serde_json::from_str(&b).unwrap();
+    let status = v["refresh"]["status"].as_str().unwrap();
+    assert!(["throttled", "not_installed"].contains(&status), "{v}");
+    if status == "throttled" {
+        assert_eq!(v["refresh"]["next_allowed"], now + 300);
+    }
+    assert_eq!(v["cards"].as_array().unwrap().len(), 2);
+    let (s, _) = get_with(&st, "/api/limits?refresh=other", &[("x-agent-usage", "1")]).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
 }

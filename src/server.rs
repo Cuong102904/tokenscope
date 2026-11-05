@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::db;
 use crate::paths::Paths;
 use crate::pricing::PriceTable;
-use crate::query::{Filter, cost, sessions};
+use crate::query::{Filter, cost, limits, sessions};
 use axum::extract::{Path, Query, Request, State};
 use axum::middleware::{self, Next};
 use axum::http::{StatusCode, header};
@@ -48,6 +48,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(sessions_api))
         .route("/api/session/{vendor}/{id}/timeline", get(timeline_api))
         .route("/api/meta", get(meta))
+        .route("/api/limits", get(limits_api))
+        .route("/api/limits/history", get(limits_history_api))
         .layer(middleware::from_fn_with_state(state.clone(), host_guard))
         .with_state(state)
 }
@@ -133,7 +135,7 @@ where
 }
 
 /// Fixed windows (today / 7 / 30 days); vendor, model and project filters still apply.
-/// `limits_mini` and `active_count` are placeholders until the limits/active tasks.
+/// `limits_mini` is the same card list as `/api/limits`; `active_count` is a placeholder until the active task.
 async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
     let f = p.filter()?;
     with_db(st, move |c, st| {
@@ -144,7 +146,7 @@ async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiRes
             "totals_30d": cost::totals(c, &st.prices, &w(30))?,
             "active_count": 0,
             "daily": cost::daily(c, &st.prices, &w(30))?,
-            "limits_mini": [],
+            "limits_mini": limits::current(c, &st.cfg, chrono::Utc::now().timestamp())?,
         }))
     })
     .await
@@ -194,6 +196,94 @@ async fn meta(State(st): State<AppState>) -> ApiResult {
             Ok(v)
         };
         Ok(Meta { vendors: distinct("vendor")?, models: distinct("model")?, projects: distinct("project")? })
+    })
+    .await
+}
+
+/// Limit-reached events shown in the limits tab cover this many days.
+const LIMIT_EVENT_DAYS: i64 = 30;
+/// `refresh=agy` runs a process and writes the DB, so it needs this header:
+/// a cross-site `<img>`/form cannot set it, and without CORS a script cannot either.
+const REFRESH_HEADER: &str = "x-agent-usage";
+
+#[derive(Debug, Default, Deserialize)]
+struct LimitsParams {
+    refresh: Option<String>,
+}
+
+/// `{ cards, events }`, plus `refresh: {status, next_allowed?, message?}` with
+/// `?refresh=agy`. A failed refresh is reported there; the cards still load.
+async fn limits_api(State(st): State<AppState>, headers: axum::http::HeaderMap, Query(p): Query<LimitsParams>) -> Response {
+    let refresh = match p.refresh.as_deref() {
+        None | Some("") => None,
+        Some("agy") if !headers.contains_key(REFRESH_HEADER) => {
+            return (StatusCode::FORBIDDEN, format!("refresh needs the {REFRESH_HEADER} header")).into_response();
+        }
+        Some("agy") => Some(run_agy_refresh(st.clone()).await),
+        Some(other) => return ApiError::BadRequest(format!("unknown refresh: {other}")).into_response(),
+    };
+    let res = with_db(st, move |c, st| {
+        let now = chrono::Utc::now().timestamp();
+        let mut v = serde_json::json!({
+            "cards": limits::current(c, &st.cfg, now)?,
+            "events": limits::events(c, &st.cfg, now - LIMIT_EVENT_DAYS * 86400)?,
+        });
+        if let Some(r) = refresh {
+            v["refresh"] = r;
+        }
+        Ok(v)
+    })
+    .await;
+    res.into_response()
+}
+
+/// `agy::refresh` on the blocking pool with its own writable connection; never fails the request.
+async fn run_agy_refresh(st: AppState) -> serde_json::Value {
+    use crate::adapters::agy::{self, RefreshOutcome};
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<RefreshOutcome> {
+        let mut conn = db::open(&st.paths.db())?;
+        agy::refresh(&st.paths, &st.cfg, &mut conn)
+    })
+    .await;
+    match out {
+        Ok(Ok(RefreshOutcome::Ran)) => serde_json::json!({"status": "ran"}),
+        Ok(Ok(RefreshOutcome::Throttled { next_allowed })) => serde_json::json!({"status": "throttled", "next_allowed": next_allowed}),
+        Ok(Ok(RefreshOutcome::NotInstalled)) => serde_json::json!({"status": "not_installed"}),
+        Ok(Err(e)) => serde_json::json!({"status": "error", "message": format!("{e:#}")}),
+        Err(e) => serde_json::json!({"status": "error", "message": format!("worker: {e}")}),
+    }
+}
+
+/// History window cap for `/api/limits/history` (90 days).
+const MAX_HISTORY_HOURS: u32 = 2160;
+
+#[derive(Debug, Default, Deserialize)]
+struct HistoryParams {
+    vendor: Option<String>,
+    account: Option<String>,
+    scope: Option<String>,
+    hours: Option<String>,
+}
+
+/// `{ points: [[measured_at, used %]], resets: [resets_at] }` for one key over the last `hours` (default 24).
+async fn limits_history_api(State(st): State<AppState>, Query(p): Query<HistoryParams>) -> ApiResult {
+    let (Some(vendor), Some(scope)) = (p.vendor.filter(|s| !s.is_empty()), p.scope.filter(|s| !s.is_empty())) else {
+        return Err(ApiError::BadRequest("vendor and scope are required".into()));
+    };
+    let account = p.account.unwrap_or_default();
+    let hours = match p.hours.as_deref() {
+        None | Some("") => 24,
+        Some(s) => match s.parse::<u32>() {
+            Ok(n) if (1..=MAX_HISTORY_HOURS).contains(&n) => n,
+            _ => return Err(ApiError::BadRequest(format!("bad hours: {s}"))),
+        },
+    };
+    with_db(st, move |c, _| {
+        let since = chrono::Utc::now().timestamp() - i64::from(hours) * 3600;
+        Ok(serde_json::json!({
+            "points": limits::history(c, &vendor, &account, &scope, since)?,
+            "resets": limits::resets(c, &vendor, &account, &scope, since)?,
+        }))
     })
     .await
 }
@@ -273,6 +363,9 @@ impl Collector {
                     if let Some(e) = s.error {
                         eprintln!("collector: {}: {e}", s.vendor.as_str());
                     }
+                }
+                if let Err(e) = db::downsample_daily(conn, chrono::Utc::now().timestamp()) {
+                    eprintln!("collector: downsampling limit snapshots: {e:#}");
                 }
                 true
             }

@@ -118,3 +118,36 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
+
+const KV_LAST_DOWNSAMPLE: &str = "limits:last_downsample";
+const DOWNSAMPLE_AGE_SECS: i64 = 90 * 86400;
+const DOWNSAMPLE_BUCKET_SECS: i64 = 300;
+
+/// Thin out limit snapshots measured before `older_than` (epoch seconds) to at
+/// most one per 5-minute bucket per `(vendor, account, scope)`, keeping the
+/// earliest of each bucket. Returns the number of rows removed.
+pub fn downsample_limits(conn: &Connection, older_than: i64) -> Result<usize> {
+    // SQLite: a bare column next to MIN() comes from the row holding the minimum
+    Ok(conn.execute(
+        "DELETE FROM limit_snapshots WHERE measured_at < ?1 AND rowid NOT IN (
+           SELECT keep FROM (
+             SELECT rowid AS keep, MIN(measured_at) FROM limit_snapshots WHERE measured_at < ?1
+             GROUP BY vendor, account, scope, measured_at / ?2))",
+        params![older_than, DOWNSAMPLE_BUCKET_SECS],
+    )?)
+}
+
+/// [`downsample_limits`] for snapshots older than 90 days, at most once per
+/// day (kv `limits:last_downsample`). `Some(removed)` when it ran.
+pub fn downsample_daily(conn: &Connection, now: i64) -> Result<Option<usize>> {
+    let last: Option<i64> = conn
+        .query_row("SELECT value FROM kv WHERE key=?1", params![KV_LAST_DOWNSAMPLE], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|v| v.parse().ok());
+    if last.is_some_and(|l| now - l < 86400) {
+        return Ok(None);
+    }
+    let removed = downsample_limits(conn, now - DOWNSAMPLE_AGE_SECS)?;
+    conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)", params![KV_LAST_DOWNSAMPLE, now.to_string()])?;
+    Ok(Some(removed))
+}
