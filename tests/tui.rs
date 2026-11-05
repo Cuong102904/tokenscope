@@ -113,3 +113,37 @@ fn build_state_hides_dead_cards_and_uses_injected_now() {
     assert_eq!(st.now, NOW);
     assert_eq!(st.status, "ok");
 }
+
+#[test]
+fn hook_skips_only_the_worker_thread() {
+    assert!(tui::is_worker_thread(Some("agent-usage-collector")));
+    assert!(!tui::is_worker_thread(Some("main")));
+    assert!(!tui::is_worker_thread(None));
+}
+
+#[test]
+fn guarded_worker_reports_panic_and_normal_exit() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    // the default hook would print the expected panic; silence is irrelevant to the assertion
+    tui::guarded_worker(&tx, || panic!("boom {}", 7));
+    match rx.recv().unwrap() {
+        tui::Msg::Died(r) => assert_eq!(r, "panic: boom 7"),
+        _ => panic!("expected Died"),
+    }
+    tui::guarded_worker(&tx, || "stopped".to_string());
+    assert!(matches!(rx.recv().unwrap(), tui::Msg::Died(r) if r == "stopped"));
+    assert_eq!(tui::died_status("x"), "bộ thu thập đã dừng: x");
+}
+
+#[test]
+fn db_error_is_sticky_until_next_good_rebuild() {
+    let mut s = state();
+    tui::apply_rebuild(&mut s, Err(anyhow::anyhow!("locked")));
+    assert!(s.status.contains("locked") && s.today.cost == 1.25);
+    tui::apply_rebuild(&mut s, Err(anyhow::anyhow!("locked again")));
+    assert!(s.status.contains("locked again"));
+    let mut fresh = state();
+    fresh.status = "ok".into();
+    tui::apply_rebuild(&mut s, Ok(fresh));
+    assert_eq!(s.status, "ok");
+}

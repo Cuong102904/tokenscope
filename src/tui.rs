@@ -210,8 +210,43 @@ enum Cmd {
     Now(bool),
 }
 
-enum Msg {
+pub enum Msg {
     Done(String),
+    /// The collector thread has exited (reason); sent exactly once, last.
+    Died(String),
+}
+
+const WORKER_NAME: &str = "agent-usage-collector";
+
+/// The panic hook restores the terminal and prints only for panics outside the collector thread.
+pub fn is_worker_thread(name: Option<&str>) -> bool {
+    name == Some(WORKER_NAME)
+}
+
+pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "không rõ".into())
+}
+
+pub fn died_status(reason: &str) -> String {
+    format!("bộ thu thập đã dừng: {reason}")
+}
+
+/// Runs `body` under a panic guard and always reports how it ended as the last message.
+pub fn guarded_worker(tx: &mpsc::Sender<Msg>, body: impl FnOnce() -> String) {
+    let reason = match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(r) => r,
+        Err(p) => format!("panic: {}", panic_message(&*p)),
+    };
+    let _ = tx.send(Msg::Died(reason));
+}
+
+/// Replace `state` with a successful rebuild; on failure keep the old numbers and show the error
+/// as the status until a later rebuild succeeds.
+pub fn apply_rebuild(state: &mut TuiState, res: anyhow::Result<TuiState>) {
+    match res {
+        Ok(s) => *state = s,
+        Err(e) => state.status = format!("lỗi đọc DB: {e:#}"),
+    }
 }
 
 fn agy_note(r: anyhow::Result<agy::RefreshOutcome>) -> String {
@@ -224,15 +259,12 @@ fn agy_note(r: anyhow::Result<agy::RefreshOutcome>) -> String {
 }
 
 /// Collector thread: own connection and adapters (not Send), collects every
-/// `refresh_seconds` and on demand; reports a status line per pass.
-fn worker(paths: Paths, cfg: Config, rx: mpsc::Receiver<Cmd>, tx: mpsc::Sender<Msg>) {
+/// `refresh_seconds` and on demand; reports a status line per pass. Returns why it stopped.
+fn worker_body(paths: Paths, cfg: Config, rx: mpsc::Receiver<Cmd>, tx: mpsc::Sender<Msg>) -> String {
     let adapters = collect::default_adapters();
     let mut conn = match db::open(&paths.db()) {
         Ok(c) => c,
-        Err(e) => {
-            let _ = tx.send(Msg::Done(format!("không mở được DB: {e:#}")));
-            return;
-        }
+        Err(e) => return format!("không mở được DB: {e:#}"),
     };
     let every = Duration::from_secs(cfg.refresh_seconds.max(1));
     let mut want = Some(false);
@@ -249,15 +281,15 @@ fn worker(paths: Paths, cfg: Config, rx: mpsc::Receiver<Cmd>, tx: mpsc::Sender<M
                 }
                 note
             }));
-            let note = out.unwrap_or_else(|_| "thu thập bị lỗi nội bộ (panic)".into());
+            let note = out.unwrap_or_else(|p| format!("thu thập bị lỗi nội bộ (panic): {}", panic_message(&*p)));
             if tx.send(Msg::Done(note)).is_err() {
-                return;
+                return "giao diện đã đóng".into();
             }
         }
         match rx.recv_timeout(every) {
             Ok(Cmd::Now(a)) => want = Some(a),
             Err(mpsc::RecvTimeoutError::Timeout) => want = Some(false),
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return "giao diện đã đóng".into(),
         }
     }
 }
@@ -277,11 +309,26 @@ pub fn run(paths: Paths) -> anyhow::Result<()> {
     let reader = open_reader(&paths)?;
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (msg_tx, msg_rx) = mpsc::channel();
+    let mut terminal = ratatui::init();
+    // ratatui's hook restores the terminal on whatever thread panics; a caught collector panic
+    // must neither do that nor print over the UI (its message reaches the status line instead)
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !is_worker_thread(std::thread::current().name()) {
+            prev(info);
+        }
+    }));
     {
         let (p, c) = (paths.clone(), cfg.clone());
-        std::thread::spawn(move || worker(p, c, cmd_rx, msg_tx));
+        let spawned = std::thread::Builder::new().name(WORKER_NAME.into()).spawn(move || {
+            let tx2 = msg_tx.clone();
+            guarded_worker(&tx2, move || worker_body(p, c, cmd_rx, msg_tx));
+        });
+        if let Err(e) = spawned {
+            ratatui::restore();
+            return Err(e.into());
+        }
     }
-    let mut terminal = ratatui::init();
     let res = event_loop(&mut terminal, &reader, &prices, &cfg, &cmd_tx, &msg_rx);
     ratatui::restore();
     res
@@ -296,14 +343,12 @@ fn event_loop(
     msg_rx: &mpsc::Receiver<Msg>,
 ) -> anyhow::Result<()> {
     let mut status = "đang thu thập…".to_string();
+    let mut died: Option<String> = None;
     let mut state = TuiState { status: status.clone(), ..Default::default() };
     let mut next_rebuild = Instant::now();
     loop {
         if Instant::now() >= next_rebuild {
-            match build_state(reader, prices, cfg, chrono::Utc::now().timestamp(), status.clone()) {
-                Ok(s) => state = s,
-                Err(e) => state.status = format!("lỗi đọc DB: {e:#}"),
-            }
+            apply_rebuild(&mut state, build_state(reader, prices, cfg, chrono::Utc::now().timestamp(), status.clone()));
             next_rebuild = Instant::now() + REDRAW_EVERY;
         }
         terminal.draw(|f| render(f, &state))?;
@@ -314,8 +359,10 @@ fn event_loop(
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     KeyCode::Char('r') => {
-                        status = "đang làm mới…".into();
-                        let _ = cmd_tx.send(Cmd::Now(true));
+                        status = match cmd_tx.send(Cmd::Now(true)) {
+                            Ok(()) if died.is_none() => "đang làm mới…".into(),
+                            _ => died_status(died.as_deref().unwrap_or("không rõ")),
+                        };
                         next_rebuild = Instant::now();
                     }
                     _ => {}
@@ -323,8 +370,14 @@ fn event_loop(
                 _ => {} // resize etc.: the next loop turn redraws
             }
         }
-        while let Ok(Msg::Done(s)) = msg_rx.try_recv() {
-            status = s;
+        while let Ok(m) = msg_rx.try_recv() {
+            match m {
+                Msg::Done(s) => status = s,
+                Msg::Died(r) => {
+                    status = died_status(&r);
+                    died = Some(r);
+                }
+            }
             next_rebuild = Instant::now();
         }
     }
