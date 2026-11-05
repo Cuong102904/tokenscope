@@ -18,6 +18,8 @@ pub struct CollectCtx<'a> {
     pub config: &'a Config,
     /// Files fully processed by the adapter; the collector calls `scan::mark_done` after writing.
     pub done_files: Vec<FileStamp>,
+    /// Files the adapter found but could not read; surfaced in the adapter's status detail.
+    pub unreadable: usize,
 }
 
 pub trait Adapter {

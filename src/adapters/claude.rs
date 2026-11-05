@@ -133,7 +133,10 @@ impl Adapter for ClaudeAdapter {
         for stamp in scan::changed_files(ctx.conn, &ctx.paths.claude_projects(), "jsonl")? {
             let lines = match scan::read_jsonl(&stamp.path) {
                 Ok(l) => l,
-                Err(_) => continue,
+                Err(_) => {
+                    ctx.unreadable += 1;
+                    continue;
+                }
             };
             let mut project = String::new();
             let mut session_id = String::new();

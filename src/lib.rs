@@ -1,8 +1,10 @@
 pub mod adapters;
+pub mod collect;
 pub mod config;
 pub mod db;
 pub mod model;
 pub mod paths;
 pub mod pricing;
+pub mod query;
 pub mod safety;
 pub mod scan;
