@@ -457,12 +457,26 @@ async function renderSkills() {
   if (sig === skSig && charts.cSkCost) return;
   skSig = sig;
   const noAnim = charts.cSkCost ? {animation: false} : {}; // data refresh on an already drawn tab: no re-animation
+  // writes `fmt(value)` just past the end of each bar (single-series charts)
+  const valueLabels = fmt => ({id: 'valueLabels', afterDatasetsDraw(ch) {
+    const {ctx} = ch;
+    ctx.save(); ctx.fillStyle = c.ink; ctx.textBaseline = 'middle'; ctx.font = '11px ' + Chart.defaults.font.family;
+    ch.getDatasetMeta(0).data.forEach((bar, i) => {
+      const v = ch.data.datasets[0].data[i];
+      const t = fmt(v, i), w = ctx.measureText(t).width;
+      // keep the text inside the chart area when the bar is (nearly) full width
+      const x = bar.x + 4 + w > ch.chartArea.right + 30 ? bar.x - w - 4 : bar.x + 4;
+      ctx.fillText(t, x, bar.y);
+    });
+    ctx.restore();
+  }});
   const hbar = (id, wrap, labels, datasets, extra) => {
     hHeight(wrap, labels.length);
     draw(id, {type: 'bar', data: {labels, datasets},
       options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false, ...noAnim,
         scales: {x: {beginAtZero: true, grid: {color: c.grid}, ...(extra.x || {})}, y: {grid: {display: false}, ticks: {color: c.ink}, ...(extra.y || {})}},
-        plugins: {legend: extra.legend || {display: false}, tooltip: {callbacks: extra.tooltip}}}});
+        plugins: {legend: extra.legend || {display: false}, tooltip: {callbacks: extra.tooltip}}},
+      plugins: extra.labels ? [valueLabels(extra.labels)] : []});
   };
   // no rows: hide the chart box and show the "Không có dữ liệu" line that precedes it
   const empty = (wrap, on) => { $(wrap).hidden = !on; $(wrap).previousElementSibling.hidden = !!on; };
@@ -471,12 +485,16 @@ async function renderSkills() {
   empty('wSkCost', top.length);
   if (top.length) hbar('cSkCost', 'wSkCost', top.map(s => s.skill),
     [{label: 'Chi phí', data: top.map(s => s.priced_cost), backgroundColor: vendorColor('claude'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
-    {x: {ticks: {callback: tickMoney}}, tooltip: {
+    {x: {ticks: {callback: tickMoney}, grace: '15%'}, labels: (v, i) => costText(top[i].cost, top[i].priced_cost), tooltip: {
       label: it => { const s = top[it.dataIndex]; return costText(s.cost, s.priced_cost) + ' · ' + num(s.messages) + ' tin nhắn'; },
       afterLabel: it => top[it.dataIndex].plugin ? 'plugin: ' + top[it.dataIndex].plugin : ''}});
   else if (charts.cSkCost) { charts.cSkCost.destroy(); delete charts.cSkCost; }
 
   const pl = d.by_plugin.filter(p => p.priced_cost > 0);
+  // plugins whose rows are all unpriced have nothing to draw: list them as n/a instead of dropping them
+  const na = d.by_plugin.filter(p => p.priced_cost <= 0 && p.cost == null).map(p => p.plugin);
+  $('skPluginNa').hidden = !na.length;
+  $('skPluginNa').textContent = na.length ? 'n/a (model chưa có giá): ' + na.join(', ') : '';
   empty('wSkPlugin', pl.length);
   if (pl.length) {
     // plugins past the 7th by cost fold into "Khác" (palette has 8 slots)
@@ -515,7 +533,7 @@ async function renderSkills() {
   empty('wSkTools', tools.length);
   if (tools.length) hbar('cSkTools', 'wSkTools', tools.map(tl),
     [{label: 'Số lần gọi', data: tools.map(t => t.count), backgroundColor: tools.map(t => vendorColor(t.vendor)), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
-    {x: {ticks: {precision: 0}}, tooltip: {label: it => vendorName(tools[it.dataIndex].vendor) + ': ' + num(it.parsed.x) + ' lần gọi'}});
+    {x: {ticks: {precision: 0}, grace: '12%'}, labels: v => num(v), tooltip: {label: it => vendorName(tools[it.dataIndex].vendor) + ': ' + num(it.parsed.x) + ' lần gọi'}});
   else if (charts.cSkTools) { charts.cSkTools.destroy(); delete charts.cSkTools; }
 }
 

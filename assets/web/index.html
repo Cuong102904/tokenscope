@@ -163,13 +163,14 @@
       <section class="card" data-sec="lim-events"><h2>Các lần chạm giới hạn <span class="t">30 ngày</span></h2><div class="body scroll"><table id="tLimEvents"></table></div></section>
     </div>
     <div data-pane="skills" hidden>
-      <p class="note">Bộ lọc model/project chỉ áp lên chi phí; số lần gọi/đọc và công cụ chỉ lọc theo ngày, hãng, và (với model/project) theo session có dữ liệu khớp.</p>
+      <p class="note">Bộ lọc model/project: chi phí lọc trực tiếp; số lần gọi/đọc và công cụ lọc theo session có tin nhắn khớp.</p>
       <div class="grid">
         <section class="card" data-sec="sk-cost"><h2>Top 15 skill theo chi phí <span class="t">Claude</span></h2>
           <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkCost"><canvas id="cSkCost" role="img" aria-label="Top 15 skill theo chi phí"></canvas></div>
             <p class="note">Đo bằng cách nào: tổng giá các tin nhắn Claude được gắn nhãn attributionSkill, tức tin nhắn tạo ra trong lúc skill hoạt động.</p></div></section>
         <section class="card" data-sec="sk-plugin"><h2>Chi phí theo plugin <span class="t">Claude</span></h2>
           <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkPlugin"><canvas id="cSkPlugin" role="img" aria-label="Chi phí theo plugin"></canvas></div>
+            <p class="note" id="skPluginNa" hidden></p>
             <p class="note">Đo bằng cách nào: cùng các tin nhắn như biểu đồ bên cạnh, gom theo attributionPlugin.</p></div></section>
       </div>
       <section class="card" data-sec="sk-count"><h2>Số lần gọi / đọc skill</h2>
