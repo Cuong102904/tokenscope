@@ -97,7 +97,10 @@
   .badge { flex:none; font-size:10px; font-weight:700; padding:1px 5px; border-radius:4px; border:1px solid var(--amber); color:var(--amber); }
   .lval { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; margin:2px 0 4px; }
   .mini .lval { font-size:17px; margin:0 0 3px; }
-  .lval.reset { font-size:14px; font-weight:500; color:var(--mute); }
+  .lval.old { color:var(--mute); }
+  .bar i.old { background:var(--mute); opacity:.45; }
+  .spin { display:inline-block; width:10px; height:10px; margin-right:6px; vertical-align:-1px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   .bar { height:8px; border-radius:4px; background:var(--track); overflow:hidden; margin-bottom:6px; }
   .bar i { display:block; height:100%; border-radius:4px; }
   .bar i.ok { background:var(--ok); } .bar i.mid { background:var(--amber); } .bar i.hi { background:var(--bad); }

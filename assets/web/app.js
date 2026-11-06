@@ -208,7 +208,9 @@ async function renderOverview() {
   // dead accounts (expired and stale) only in the Limits tab; the no-data placeholder stays
   const shown = d.limits_mini.filter(c => c.no_data || !(c.expired && c.stale));
   const hidden = d.limits_mini.length - shown.length;
+  ovCards = shown;
   renderLimitCards($('ovLimits'), shown, true);
+  autoRefresh(shown);
   if (hidden) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(hidden)} old ${hidden === 1 ? 'card' : 'cards'} — see the Limits tab</a></div>`);
 }
 
@@ -250,8 +252,16 @@ function limitCard(c, mini) {
     (c.stale ? '<span class="badge" title="This reading is old and may no longer be accurate">STALE</span>' : '') + '</div>';
   let body;
   if (c.expired) {
-    // the last number belongs to the previous window: never show it as current
-    body = `<div class="lval reset">Reset, waiting for a new reading</div><div class="lmeta">Reset at ${esc(fmtTs(c.resets_at))} · ${esc(ago(c.resets_at))}</div>`;
+    // the number belongs to the previous window: shown muted and labelled, never as current
+    const p = Math.max(0, Math.min(100, Number(c.used_percent)));
+    const next = toolBusy[c.vendor] ? '<span class="spin" aria-hidden="true"></span>Updating…'
+      : TOOL_NAME[c.vendor] && !AUTO_TOOLS.includes(c.vendor) ? 'Click Refresh ' + esc(TOOL_NAME[c.vendor]) + ' for a new reading'
+      : !AUTO_TOOLS.includes(c.vendor) ? 'Waiting for ' + esc(vendorName(c.vendor)) + ' to log a new reading'
+      : toolRetryAt[c.vendor] ? 'Updates at ' + esc(fmtTs(toolRetryAt[c.vendor])) + ' · ' + esc(until(toolRetryAt[c.vendor]))
+      : 'Waiting for a new reading';
+    body = `<div class="lval old">${esc(fmtPct(c.used_percent))} <span class="lmeta">before the reset</span></div>` +
+      `<div class="bar"><i class="old" style="width:${esc(p)}%"></i></div>` +
+      `<div class="lmeta">Reset at ${esc(fmtTs(c.resets_at))} · ${esc(ago(c.resets_at))}</div><div class="lmeta">${next}</div>`;
   } else {
     const p = Math.max(0, Math.min(100, Number(c.used_percent))), lv = level(p);
     body = `<div class="lval ${lv}">${esc(fmtPct(c.used_percent))} <span class="lmeta">used</span></div>` +
@@ -281,6 +291,7 @@ async function renderLimits(data) {
   const d = data || await getJson('/api/limits?' + vendorQuery());
   limCards = d.cards;
   renderLimitCards($('limCards'), d.cards, false);
+  autoRefresh(d.cards);
   $('tLimEvents').innerHTML = '<thead><tr>' + ['Time', 'Vendor', 'Account', 'Scope', 'Resets at']
     .map(h => `<th class="l">${esc(h)}</th>`).join('') + '</tr></thead><tbody>' +
     (d.events.length ? d.events.map(e => `<tr><td class="l">${esc(fmtTs(e.ts))}</td><td class="l">${esc(vendorName(e.vendor))}</td>` +
@@ -344,31 +355,62 @@ async function renderLimitChart() {
 }
 
 // On-demand limits read by running the tool's own `/usage` (`claude` or `agy`).
+// A card whose window has reset updates itself: the tool is asked right away, or
+// when the server's 5-minute throttle allows, and the card says which.
 const TOOL_NAME = {claude: 'Claude', agy: 'agy'};
+// Only Claude refreshes on its own: its /usage costs no tokens. agy's may use quota and
+// it reports a reset seconds after each reading, so it would re-run every 5 minutes.
+const AUTO_TOOLS = ['claude'];
+const toolBusy = {}, toolRetryAt = {}, toolTimer = {};
+let ovCards = [];
 function refreshText(tool, r) {
   if (!r) return '';
   const n = TOOL_NAME[tool];
   switch (r.status) {
     case 'ran': return 'Refreshed ' + n + ' at ' + fmtClock() + '.';
-    case 'throttled': return n + ' was refreshed recently (at most once every 5 minutes). Try again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
+    case 'throttled': return n + ' was refreshed recently (at most once every 5 minutes). It updates again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
     case 'not_installed': return 'The ' + tool + ' command was not found on PATH.';
     default: return n + ' refresh failed: ' + (r.message || r.status);
   }
 }
-async function refreshTool(tool) {
-  const buttons = document.querySelectorAll('.lim-actions button');
-  buttons.forEach(b => b.disabled = true); // one run at a time
-  $('refreshMsg').textContent = 'Running ' + tool + ' /usage… (up to 30 seconds)';
+// redraw the cards from the last data (busy / retry state shows on them)
+function rerenderCards() {
+  if (currentTab() === 'limits') renderLimitCards($('limCards'), limCards, false);
+  if (currentTab() === 'overview') renderLimitCards($('ovLimits'), ovCards, true);
+}
+function retryAt(tool, at) {
+  clearTimeout(toolTimer[tool]);
+  toolRetryAt[tool] = at;
+  toolTimer[tool] = setTimeout(() => { toolRetryAt[tool] = null; refresh(); }, Math.max(1000, at * 1000 - Date.now() + 1000));
+}
+async function refreshTool(tool, auto) {
+  if (toolBusy[tool]) return;
+  toolBusy[tool] = true;
+  $(tool + 'Refresh').disabled = true;
+  rerenderCards();
+  $('refreshMsg').textContent = (auto ? 'A ' + TOOL_NAME[tool] + ' window has reset: updating' : 'Running ' + tool + ' /usage') + '… (up to 30 seconds)';
   try {
     const r = await fetch('/api/limits?refresh=' + tool + '&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
-    const d = await r.json();
-    $('refreshMsg').textContent = refreshText(tool, d.refresh);
-    if (currentTab() === 'limits') await renderLimits(d);
+    const res = (await r.json()).refresh;
+    $('refreshMsg').textContent = refreshText(tool, res);
+    if (res?.status === 'throttled') retryAt(tool, res.next_allowed);
+    else if (res?.status === 'ran') { clearTimeout(toolTimer[tool]); toolRetryAt[tool] = null; }
+    else retryAt(tool, nowSec() + 300); // not installed or failed: try again later, not on every refresh
   } catch (e) {
     $('refreshMsg').textContent = TOOL_NAME[tool] + ' refresh failed: ' + e.message;
+    retryAt(tool, nowSec() + 300);
   } finally {
-    buttons.forEach(b => b.disabled = false);
+    toolBusy[tool] = false;
+    $(tool + 'Refresh').disabled = false;
+    refresh();
+  }
+}
+// ask Claude for a new reading as soon as one of its shown windows has reset
+function autoRefresh(cards) {
+  if (document.hidden) return;
+  for (const tool of AUTO_TOOLS) {
+    if (!toolBusy[tool] && !toolRetryAt[tool] && cards.some(c => c.vendor === tool && c.expired)) refreshTool(tool, true);
   }
 }
 function selectLimit(k) {
