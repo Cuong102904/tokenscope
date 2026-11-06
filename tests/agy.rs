@@ -157,6 +157,12 @@ fn status_refresh_prints_agy_lines() {
         bindir.path(),
         "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT",
     );
+    // a fake `claude` too: `status --refresh` asks it as well, and the real one must never run in tests
+    fake_claude(
+        bindir.path(),
+        "echo 'Current session: 49% used · resets 11:39am (UTC)'",
+    );
+    fake_codex(bindir.path());
     let path = format!(
         "{}:{}",
         bindir.path().display(),
@@ -177,7 +183,23 @@ fn status_refresh_prints_agy_lines() {
     );
     // 2026-11-09T00:00Z is 07:00 in Vietnam: reset times are shown in local time
     assert!(out.contains("resets 2026-11-09 07:00"), "{out}");
+    assert!(out.contains("claude five_hour: 49% used"), "{out}");
+    assert!(out.contains("codex five_hour: 39% used"), "{out}");
     assert!(!out.contains("UTC"), "{out}");
+}
+
+fn fake_claude(dir: &Path, body: &str) {
+    let p = dir.join("claude");
+    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A `codex app-server` stand-in that answers the rate-limit read.
+fn fake_codex(dir: &Path) {
+    let p = dir.join("codex");
+    let answer = r#"{"id":2,"result":{"accountId":"acc","rateLimits":{"limitId":"codex","primary":{"usedPercent":39,"windowDurationMins":300,"resetsAt":1793948751}}}}"#;
+    std::fs::write(&p, format!("#!/bin/sh\nwhile read -r l; do case \"$l\" in *rateLimits/read*) echo '{answer}' ;; esac; done\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn stamped(conn: &rusqlite::Connection) -> bool {
@@ -231,6 +253,12 @@ fn status_refresh_json_has_agy_key() {
         bindir.path(),
         "cat <<'EOT'\nGemini Models\tWeekly Limit Remaining\t80%\t2026-11-09T00:00:00Z\nEOT",
     );
+    // a fake `claude` too: `status --refresh` asks it as well, and the real one must never run in tests
+    fake_claude(
+        bindir.path(),
+        "echo 'Current session: 49% used · resets 11:39am (UTC)'",
+    );
+    fake_codex(bindir.path());
     let path = format!(
         "{}:{}",
         bindir.path().display(),
@@ -245,4 +273,7 @@ fn status_refresh_json_has_agy_key() {
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["agy"]["snapshots"][0]["scope"], "weekly:Gemini Models");
     assert_eq!(v["agy"]["snapshots"][0]["used_percent"], 20.0);
+    assert_eq!(v["claude"]["snapshots"][0]["scope"], "five_hour");
+    assert_eq!(v["claude"]["snapshots"][0]["used_percent"], 49.0);
+    assert_eq!(v["codex"]["snapshots"][0]["used_percent"], 39.0);
 }

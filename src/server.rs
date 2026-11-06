@@ -332,7 +332,7 @@ struct LimitsParams {
 }
 
 /// `{ cards, events }`, plus `refresh: {status, next_allowed?, message?}` with
-/// `?refresh=agy`. A failed refresh is reported there; the cards still load.
+/// `?refresh=agy`, `?refresh=claude` or `?refresh=codex`. A failed refresh is reported there; the cards still load.
 async fn limits_api(
     State(st): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -340,14 +340,18 @@ async fn limits_api(
 ) -> Response {
     let refresh = match p.refresh.as_deref() {
         None | Some("") => None,
-        Some("agy") if !headers.contains_key(REFRESH_HEADER) => {
+        Some(tool @ ("agy" | "claude" | "codex")) if !headers.contains_key(REFRESH_HEADER) => {
             return (
                 StatusCode::FORBIDDEN,
-                format!("refresh needs the {REFRESH_HEADER} header"),
+                format!("refresh={tool} needs the {REFRESH_HEADER} header"),
             )
                 .into_response();
         }
-        Some("agy") => Some(run_agy_refresh(st.clone()).await),
+        Some("agy") => Some(run_refresh(st.clone(), crate::adapters::agy::refresh).await),
+        Some("claude") => {
+            Some(run_refresh(st.clone(), crate::adapters::claude_usage::refresh).await)
+        }
+        Some("codex") => Some(run_refresh(st.clone(), crate::adapters::codex_usage::refresh).await),
         Some(other) => {
             return ApiError::BadRequest(format!("unknown refresh: {other}")).into_response();
         }
@@ -369,12 +373,19 @@ async fn limits_api(
     res.into_response()
 }
 
-/// `agy::refresh` on the blocking pool with its own writable connection; never fails the request.
-async fn run_agy_refresh(st: AppState) -> serde_json::Value {
-    use crate::adapters::agy::{self, RefreshOutcome};
+type RefreshFn = fn(
+    &Paths,
+    &Config,
+    &mut rusqlite::Connection,
+) -> anyhow::Result<crate::adapters::refresh::RefreshOutcome>;
+
+/// An on-demand limits refresh (`agy`, `claude` or `codex`) on the blocking pool with its own writable
+/// connection; never fails the request.
+async fn run_refresh(st: AppState, refresh: RefreshFn) -> serde_json::Value {
+    use crate::adapters::refresh::RefreshOutcome;
     let out = tokio::task::spawn_blocking(move || -> anyhow::Result<RefreshOutcome> {
         let mut conn = db::open(&st.paths.db())?;
-        agy::refresh(&st.paths, &st.cfg, &mut conn)
+        refresh(&st.paths, &st.cfg, &mut conn)
     })
     .await;
     match out {

@@ -4,6 +4,16 @@
 
 tokenscope reads the session logs that Claude Code, OpenAI Codex CLI, OpenCode and Antigravity (`agy`) already write to your disk. It turns them into token counts, estimated cost per session, project and model, and rate-limit usage over time. Everything runs on your machine. Nothing is uploaded, and no API keys are needed.
 
+![tokenscope overview: daily cost by model and rate limits per account](docs/screenshots/overview-light.png)
+
+## Screenshots
+
+These use made-up demo data (`scripts/demo/`); nothing in them is a real project or account.
+
+| Rate limits, one row per account (dark theme) | Cost by day, vendor, project and model |
+|---|---|
+| ![Limits tab](docs/screenshots/limits-dark.png) | ![Cost tab](docs/screenshots/cost-light.png) |
+
 ## Why
 
 If you use several coding agents on subscriptions, it's hard to answer simple questions:
@@ -91,7 +101,7 @@ tokenscope serve     # open http://127.0.0.1:8765
 | `tokenscope collect --watch [--interval N]` | Keeps collecting every N seconds. Use this if you only use the TUI or status line. |
 | `tokenscope serve [--port 8765]` | Starts the web dashboard on `127.0.0.1`. |
 | `tokenscope tui` | Starts the terminal dashboard. `r` refreshes, `q` quits. |
-| `tokenscope status [--json] [--refresh]` | Prints a one-shot summary. `--refresh` also asks `agy` for its weekly limits (at most once every 5 minutes). |
+| `tokenscope status [--json] [--refresh]` | Prints a one-shot summary. `--refresh` also asks `claude`, `codex` and `agy` for their current limits (each at most once every 5 minutes). |
 | `tokenscope statusline …` | Wraps the Claude Code status line (see below). |
 
 ## Where the data comes from
@@ -99,16 +109,26 @@ tokenscope serve     # open http://127.0.0.1:8765
 | Agent | Source | Notes |
 |---|---|---|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | Tokens and cost per message. |
-| Claude Code limits | status line snapshots | Claude only reports rate limits to the status line, so you need the status line hook below. |
+| Claude Code limits | `claude -p --no-session-persistence "/usage"`, and optionally status line snapshots | `/usage` runs on demand only (Refresh Claude button or `status --refresh`, at most once every 5 minutes) and saves no session. The status line hook below adds a reading on every message. |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | Tokens plus the rate-limit info Codex logs. |
+| Codex limits | `codex app-server` (`account/rateLimits/read`) | On demand (Refresh Codex button or `status --refresh`, at most once every 5 minutes). Structured JSON, no model call; only the signed-in account. |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Opened read-only. |
 | Antigravity | `agy -p "/usage"` | Run on demand only, at most once every 5 minutes. |
 
 Log files are only read, never modified.
 
-## Claude Code rate limits (status line)
+Limits are shown one row per account, with a status column ("Available", "Limit reached until …", "No current reading"). When a Claude or Codex window resets or its reading goes stale, the dashboard keeps the old number (muted) and asks the tool for a new reading on its own; agy is refreshed only by its button, because its `/usage` may use quota. Windows last seen under an older plan (a monthly window from before a free → Plus upgrade) are dropped.
 
-Claude Code sends its 5-hour and weekly usage only to the status line command. To capture it:
+## Claude Code rate limits
+
+Claude Code keeps its 5-hour and weekly usage on Anthropic's side; no local log has it. tokenscope reads it in two ways, and neither touches your Claude credentials:
+
+- **On demand:** the **Refresh Claude** button on the Limits tab (or `tokenscope status --refresh`) runs `claude -p --no-session-persistence "/usage"` and reads the 5-hour, weekly and per-model weekly numbers it prints. It runs at most once every 5 minutes, takes a few seconds and doesn't count as a Claude session.
+- **Continuously (optional):** Claude Code also passes the same numbers to the status line command on every message. With the status line hook you get a reading per message, which is enough for the projected time-to-limit.
+
+The `/usage` output is text meant for people. If a Claude Code update changes its wording, the refresh reports an error instead of showing wrong numbers.
+
+To add the status line hook:
 
 1. Print the snippet:
 
@@ -158,6 +178,8 @@ cargo test --all-targets
 ```
 
 CI runs the same three checks (plus `shellcheck install.sh`) on every pull request. `main` is protected: changes land through pull requests with a green CI.
+
+To refresh the README screenshots after a UI change, run `scripts/demo/screenshots.sh`. It seeds made-up data into a throwaway HOME, serves it without your `claude`/`codex`/`agy` on PATH and captures `docs/screenshots/*.png` with headless Chrome (needs python3, node 22+ and google-chrome).
 
 To release: bump `version` in `Cargo.toml`, merge, then push a matching tag (`git tag v0.2.0 && git push customer v0.2.0`). The release workflow tests, builds the static x86_64 and aarch64 binaries and publishes them with checksums to GitHub Releases, where `install.sh` picks them up.
 

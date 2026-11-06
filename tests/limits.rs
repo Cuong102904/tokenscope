@@ -593,3 +593,121 @@ fn collect_run_all_downsamples_once_a_day() {
         .unwrap();
     assert!(stamp.parse::<i64>().is_ok());
 }
+
+#[test]
+fn windows_of_an_older_plan_are_dropped() {
+    let (_d, c) = setup();
+    let now = 1_000_000;
+    let ins = |scope: &str, wm: i64, plan: Option<&str>, at: i64| {
+        c.execute(
+            "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source)
+             VALUES('codex','acc',?1,?2,10,?3,?4,?5,'test')",
+            params![scope, wm, now + 86400, plan, at],
+        )
+        .unwrap();
+    };
+    // the account was on free (monthly window), then moved to plus (5-hour + weekly)
+    ins("monthly", 43200, Some("free"), now - 86400 * 7);
+    ins("five_hour", 300, Some("plus"), now - 60);
+    ins("weekly", 10080, Some("plus"), now - 60);
+    // another account still on free keeps its monthly card
+    c.execute(
+        "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source)
+         VALUES('codex','other','monthly',43200,46,?1,'free',?2,'test')",
+        params![now + 86400, now - 3600],
+    )
+    .unwrap();
+    // a reading without a plan (Claude, agy) is never dropped
+    c.execute(
+        "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source)
+         VALUES('codex','acc','window_90m',90,5,?1,NULL,?2,'test')",
+        params![now + 86400, now - 86400 * 9],
+    )
+    .unwrap();
+    let cards = limits::current(&c, &Config::default(), now).unwrap();
+    let mut got: Vec<_> = cards
+        .iter()
+        .filter(|x| !x.no_data)
+        .map(|x| format!("{}:{}", x.account, x.scope))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            "acc:five_hour",
+            "acc:weekly",
+            "acc:window_90m",
+            "other:monthly"
+        ]
+    );
+}
+
+#[test]
+fn accounts_without_a_reading_for_30_days_are_hidden() {
+    let (_d, c) = setup();
+    let now = 100_000_000;
+    // old Codex logs without an account: last seen 70 days ago, long reset
+    snap(
+        &c,
+        "codex",
+        "",
+        "five_hour",
+        300,
+        79.0,
+        now - 70 * 86400 + 3600,
+        now - 70 * 86400,
+    );
+    snap(
+        &c,
+        "codex",
+        "",
+        "weekly",
+        10080,
+        59.0,
+        now - 65 * 86400,
+        now - 70 * 86400,
+    );
+    // another account read 3 days ago stays, even though its reading is stale
+    snap(
+        &c,
+        "codex",
+        "b6e929bc",
+        "monthly",
+        43200,
+        46.0,
+        now + 19 * 86400,
+        now - 3 * 86400,
+    );
+    // one fresh window keeps the whole account, old windows of it included
+    snap(
+        &c,
+        "codex",
+        "f8ce04de",
+        "five_hour",
+        300,
+        39.0,
+        now + 3600,
+        now - 60,
+    );
+    snap(
+        &c,
+        "codex",
+        "f8ce04de",
+        "weekly",
+        10080,
+        50.0,
+        now - 40 * 86400,
+        now - 45 * 86400,
+    );
+    let cards = limits::current(&c, &Config::default(), now).unwrap();
+    let mut got: Vec<_> = cards
+        .iter()
+        .filter(|x| !x.no_data)
+        .map(|x| format!("{}:{}", x.account, x.scope))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        ["b6e929bc:monthly", "f8ce04de:five_hour", "f8ce04de:weekly"]
+    );
+}

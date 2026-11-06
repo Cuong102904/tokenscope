@@ -205,11 +205,13 @@ async function renderOverview() {
   ].join('');
   setWarn(d.totals_30d.unpriced_models);
   drawDaily('cOvDaily', d.daily);
-  // dead accounts (expired and stale) only in the Limits tab; the no-data placeholder stays
-  const shown = d.limits_mini.filter(c => c.no_data || !(c.expired && c.stale));
-  const hidden = d.limits_mini.length - shown.length;
+  // accounts with no current reading at all (old logs, other accounts) only in the Limits tab
+  const old = new Set(limitAccounts(d.limits_mini.filter(c => !c.no_data)).filter(a => a.cards.every(c => c.stale)).map(a => a.key));
+  const shown = d.limits_mini.filter(c => !old.has(c.vendor + '|' + c.account));
+  ovCards = shown;
   renderLimitCards($('ovLimits'), shown, true);
-  if (hidden) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(hidden)} old ${hidden === 1 ? 'card' : 'cards'} — see the Limits tab</a></div>`);
+  autoRefresh(shown);
+  if (old.size) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(old.size)} ${old.size === 1 ? 'account' : 'accounts'} without a current reading — see the Limits tab</a></div>`);
 }
 
 // ---------- limits ----------
@@ -242,38 +244,94 @@ const level = p => p >= 90 ? 'hi' : p >= 70 ? 'mid' : 'ok';
 const limKey = c => [c.vendor, c.account, c.scope].join('|');
 function splitLimKey(k) { const [vendor, account, ...rest] = k.split('|'); return {vendor, account: account || '', scope: rest.join('|')}; }
 
-function limitCard(c, mini) {
-  if (c.no_data) return `<div class="lcard nodata"><div class="lhead"><span class="sc">${esc(vendorName(c.vendor))}</span></div><div class="lmeta">${esc(c.eta_note)}</div></div>`;
-  const sel = !mini && limKey(c) === urlState().lim;
-  const head = `<div class="lhead"><span class="sc">${esc(scopeLabel(c.scope))}</span>` +
-    `<span class="ac" title="${esc(c.account_label)}">${esc(c.account_label)}</span>` +
-    (c.stale ? '<span class="badge" title="This reading is old and may no longer be accurate">STALE</span>' : '') + '</div>';
-  let body;
+// ---------- limit table: one row per account, one column per window ----------
+const WINDOW_RANK = {five_hour: 0, weekly: 2, seven_day: 2, monthly: 3};
+const windowRank = scope => { const b = String(scope).split(':')[0]; return WINDOW_RANK[b] ?? (/^window_\d+m$/.test(b) ? 1 : 4); };
+const byWindow = (a, b) => windowRank(a) - windowRank(b) || String(a).localeCompare(String(b));
+const pctOf = c => Math.max(0, Math.min(100, Number(c.used_percent)));
+// "14:05" when it is less than a day away, else "Nov 11"
+const resetShort = ts => ts - nowSec() < 86400
+  ? new Date(ts * 1000).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'})
+  : new Date(ts * 1000).toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+
+// what happens next for a window that has reset (its number belongs to the previous window)
+function expiredNext(c) {
+  if (c.account === '') return 'Old logs: nothing left to refresh';
+  if (toolBusy[c.vendor]) return '<span class="spin" aria-hidden="true"></span>Updating…';
+  if (autoTried[limKey(c)] === c.measured_at) return c.vendor === 'codex'
+    ? 'Not the signed-in Codex account: waiting for its logs' : 'No newer reading from ' + esc(TOOL_NAME[c.vendor]) + ' yet';
+  if (!autoCandidate(c)) return TOOL_NAME[c.vendor] ? 'Click Refresh ' + esc(TOOL_NAME[c.vendor]) : 'Waiting for a new reading';
+  if (toolRetryAt[c.vendor]) return 'Updates at ' + esc(fmtTs(toolRetryAt[c.vendor])) + ' · ' + esc(until(toolRetryAt[c.vendor]));
+  return 'Waiting for a new reading';
+}
+
+function limitCell(c, mini) {
+  if (!c) return '<td class="lc none">—</td>';
+  const p = pctOf(c), lv = c.expired || c.stale ? 'old' : level(p);
+  const tip = [fmtPct(c.used_percent) + ' used · ' + fmtPct(100 - p) + ' left',
+    'Measured ' + fmtTs(c.measured_at) + ' (' + c.source + ') · ' + ago(c.measured_at),
+    c.resets_at != null ? (c.expired ? 'Reset at ' : 'Resets ') + fmtTs(c.resets_at) : '',
+    c.plan_type ? 'Plan ' + c.plan_type : '',
+    c.expired ? '' : c.eta != null ? 'Projected to hit 100%: ' + fmtTs(c.eta) : 'No ETA: ' + c.eta_note,
+    c.warning ? 'Warning: ' + c.warning : '', mini ? '' : 'Click for the history chart'].filter(Boolean).join('\n');
+  let main, sub;
   if (c.expired) {
-    // the last number belongs to the previous window: never show it as current
-    body = `<div class="lval reset">Reset, waiting for a new reading</div><div class="lmeta">Reset at ${esc(fmtTs(c.resets_at))} · ${esc(ago(c.resets_at))}</div>`;
+    main = `${esc(fmtPct(c.used_percent))} <span class="lmeta">before the reset</span>`;
+    sub = expiredNext(c);
   } else {
-    const p = Math.max(0, Math.min(100, Number(c.used_percent))), lv = level(p);
-    body = `<div class="lval ${lv}">${esc(fmtPct(c.used_percent))} <span class="lmeta">used</span></div>` +
-      `<div class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(p)}" aria-label="${esc(fmtPct(p) + ' used')}"><i class="${lv}" style="width:${esc(p)}%"></i></div>` +
-      (c.resets_at != null ? `<div class="lmeta">Reset ${esc(fmtTs(c.resets_at))} · ${esc(until(c.resets_at))}</div>` : '');
+    main = p >= 100 ? 'Limit reached' : esc(fmtPct(100 - p)) + ' left';
+    sub = c.resets_at != null ? 'resets ' + esc(resetShort(c.resets_at)) + ' · ' + esc(until(c.resets_at)) : '';
+    if (c.stale) sub += (sub ? ' · ' : '') + '<span class="badge">STALE</span>';
   }
-  const measured = mini
-    ? `<div class="lmeta">measured ${esc(ago(c.measured_at))}</div>`
-    : `<div class="lmeta">Measured ${esc(fmtTs(c.measured_at))} (${esc(c.source)}) · ${esc(ago(c.measured_at))}${c.plan_type ? ' · plan ' + esc(c.plan_type) : ''}</div>`;
-  const eta = mini || c.expired ? '' : `<div class="lmeta">${c.eta != null
-    ? 'Projected to hit 100%: ' + esc(fmtTs(c.eta)) + ' · ' + esc(until(c.eta))
-    : 'No ETA: ' + esc(c.eta_note)}</div>`;
-  const warn = c.warning ? `<div class="lwarn">Warning: ${esc(c.warning)}</div>` : '';
-  return `<div class="lcard${sel ? ' sel' : ''}" role="button" tabindex="0" data-k="${esc(limKey(c))}">${head}${body}${measured}${eta}${warn}</div>`;
+  const sel = !mini && limKey(c) === urlState().lim;
+  return `<td class="lc${sel ? ' sel' : ''}" data-k="${esc(limKey(c))}" role="button" tabindex="0" title="${esc(tip)}">` +
+    `<div class="lv ${lv}">${main}${c.warning ? ' <span class="lwarn" title="' + esc(c.warning) + '">⚠</span>' : ''}</div>` +
+    `<div class="bar"><i class="${lv}" style="width:${esc(p)}%"></i></div><div class="lmeta">${sub}</div></td>`;
+}
+
+// one line answer to "can I use this account now?"
+function accountStatus(cs) {
+  const live = cs.filter(c => !c.expired && !c.stale);
+  const full = live.filter(c => pctOf(c) >= 100);
+  if (full.length) {
+    const back = Math.max(...full.map(c => c.resets_at || 0));
+    return ['hi', 'Limit reached' + (back ? ' until ' + resetShort(back) : '')];
+  }
+  if (cs.some(c => c.expired || c.stale) && toolBusy[cs[0].vendor]) return ['', '<span class="spin" aria-hidden="true"></span>Updating…'];
+  if (!live.length) return ['mute', 'No current reading · last ' + ago(Math.max(...cs.map(c => c.measured_at)))];
+  const near = live.filter(c => pctOf(c) >= 90);
+  if (near.length) return ['mid', 'Nearly out · ' + near.map(c => scopeLabel(c.scope) + ' ' + fmtPct(100 - pctOf(c)) + ' left').join(', ')];
+  return ['ok', 'Available'];
+}
+
+// accounts of the given cards: [{key, cards}], most recently measured first
+function limitAccounts(cards) {
+  const m = new Map();
+  for (const c of cards) { if (!m.has(c.vendor + '|' + c.account)) m.set(c.vendor + '|' + c.account, []); m.get(c.vendor + '|' + c.account).push(c); }
+  const newest = cs => Math.max(...cs.map(c => c.measured_at));
+  return [...m].map(([key, cs]) => ({key, cards: cs})).sort((a, b) => newest(b.cards) - newest(a.cards));
 }
 
 function renderLimitCards(el, cards, mini) {
-  const groups = new Map();
-  for (const c of cards) { if (!groups.has(c.vendor)) groups.set(c.vendor, []); groups.get(c.vendor).push(c); }
-  el.innerHTML = groups.size ? [...groups].map(([v, cs]) =>
-    `<div class="lim-group"><h3>${esc(vendorName(v))}</h3><div class="lim-grid${mini ? ' mini' : ''}">${cs.map(c => limitCard(c, mini)).join('')}</div></div>`).join('')
-    : '<div class="empty">No rate-limit data yet.</div>';
+  const vendors = new Map();
+  for (const c of cards) { if (!vendors.has(c.vendor)) vendors.set(c.vendor, []); vendors.get(c.vendor).push(c); }
+  el.innerHTML = vendors.size ? [...vendors].map(([v, cs]) => {
+    const head = `<div class="lim-group"><h3>${esc(vendorName(v))}</h3>`;
+    const nodata = cs.find(c => c.no_data);
+    if (nodata) return head + `<div class="lmeta">${esc(nodata.eta_note)}</div></div>`;
+    const scopes = [...new Set(cs.map(c => c.scope))].sort(byWindow);
+    const rows = limitAccounts(cs).map(({cards: acs}) => {
+      const a = acs.reduce((x, y) => (y.measured_at > x.measured_at ? y : x));
+      const [cls, status] = accountStatus(acs);
+      return `<tr><td class="acc"><div class="an" title="${esc(a.account_label)}">${esc(a.account_label)}</div>` +
+        `<div class="lmeta">${a.plan_type ? esc(cap(a.plan_type)) + ' · ' : ''}measured ${esc(ago(a.measured_at))}</div></td>` +
+        scopes.map(sc => limitCell(acs.find(c => c.scope === sc), mini)).join('') +
+        `<td class="st ${cls}">${status}</td></tr>`;
+    }).join('');
+    return head + `<div class="scroll"><table class="ltab${mini ? ' mini' : ''}"><thead><tr><th>Account</th>` +
+      scopes.map(sc => `<th>${esc(scopeLabel(sc))}</th>`).join('') + '<th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+  }).join('') : '<div class="empty">No rate-limit data yet.</div>';
 }
 
 let limCards = [];
@@ -281,6 +339,7 @@ async function renderLimits(data) {
   const d = data || await getJson('/api/limits?' + vendorQuery());
   limCards = d.cards;
   renderLimitCards($('limCards'), d.cards, false);
+  autoRefresh(d.cards);
   $('tLimEvents').innerHTML = '<thead><tr>' + ['Time', 'Vendor', 'Account', 'Scope', 'Resets at']
     .map(h => `<th class="l">${esc(h)}</th>`).join('') + '</tr></thead><tbody>' +
     (d.events.length ? d.events.map(e => `<tr><td class="l">${esc(fmtTs(e.ts))}</td><td class="l">${esc(vendorName(e.vendor))}</td>` +
@@ -343,38 +402,83 @@ async function renderLimitChart() {
   });
 }
 
-function agyText(r) {
+// On-demand limits: `claude /usage`, `codex app-server` and `agy /usage`.
+// A reading whose window has reset or that went stale updates itself: the tool is asked right away, or
+// when the server's 5-minute throttle allows, and the card says which.
+const TOOL_NAME = {claude: 'Claude', codex: 'Codex', agy: 'agy'};
+// Claude and Codex refresh on their own: neither read calls a model. agy's may use quota
+// and it reports a reset seconds after each reading, so it would re-run every 5 minutes.
+const AUTO_TOOLS = ['claude', 'codex'];
+// card key -> measured_at of the reading a successful auto refresh did not replace (another
+// account than the logged-in one, say): that reading is not retried again
+const autoTried = {};
+const toolBusy = {}, toolRetryAt = {}, toolTimer = {};
+let ovCards = [];
+function refreshText(tool, r) {
   if (!r) return '';
+  const n = TOOL_NAME[tool];
   switch (r.status) {
-    case 'ran': return 'Refreshed agy at ' + fmtClock() + '.';
-    case 'throttled': return 'agy ran recently (at most once every 5 minutes). Try again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
-    case 'not_installed': return 'The agy command was not found on PATH.';
-    default: return 'agy refresh failed: ' + (r.message || r.status);
+    case 'ran': return 'Refreshed ' + n + ' at ' + fmtClock() + '.';
+    case 'throttled': return n + ' was refreshed recently (at most once every 5 minutes). It updates again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
+    case 'not_installed': return 'The ' + tool + ' command was not found on PATH.';
+    default: return n + ' refresh failed: ' + (r.message || r.status);
   }
 }
-async function refreshAgy() {
-  const b = $('agyRefresh');
-  b.disabled = true;
-  $('agyMsg').textContent = 'Running agy /usage… (up to 30 seconds)';
+// redraw the cards from the last data (busy / retry state shows on them)
+function rerenderCards() {
+  if (currentTab() === 'limits') renderLimitCards($('limCards'), limCards, false);
+  if (currentTab() === 'overview') renderLimitCards($('ovLimits'), ovCards, true);
+}
+function retryAt(tool, at) {
+  clearTimeout(toolTimer[tool]);
+  toolRetryAt[tool] = at;
+  toolTimer[tool] = setTimeout(() => { toolRetryAt[tool] = null; refresh(); }, Math.max(1000, at * 1000 - Date.now() + 1000));
+}
+async function refreshTool(tool, auto, cards) {
+  if (toolBusy[tool]) return;
+  toolBusy[tool] = true;
+  $(tool + 'Refresh').disabled = true;
+  rerenderCards();
+  $('refreshMsg').textContent = (auto ? 'Updating ' + TOOL_NAME[tool] + ' limits' : 'Asking ' + TOOL_NAME[tool] + ' for its limits') + '… (up to 30 seconds)';
   try {
-    const r = await fetch('/api/limits?refresh=agy&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
+    const r = await fetch('/api/limits?refresh=' + tool + '&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
-    const d = await r.json();
-    $('agyMsg').textContent = agyText(d.refresh);
-    if (currentTab() === 'limits') await renderLimits(d);
+    const res = (await r.json()).refresh;
+    $('refreshMsg').textContent = refreshText(tool, res);
+    if (res?.status === 'throttled') retryAt(tool, res.next_allowed);
+    else if (res?.status === 'ran') {
+      clearTimeout(toolTimer[tool]); toolRetryAt[tool] = null;
+      for (const c of cards || []) autoTried[limKey(c)] = c.measured_at;
+    }
+    else retryAt(tool, nowSec() + 300); // not installed or failed: try again later, not on every refresh
   } catch (e) {
-    $('agyMsg').textContent = 'agy refresh failed: ' + e.message;
+    $('refreshMsg').textContent = TOOL_NAME[tool] + ' refresh failed: ' + e.message;
+    retryAt(tool, nowSec() + 300);
   } finally {
-    b.disabled = false;
+    toolBusy[tool] = false;
+    $(tool + 'Refresh').disabled = false;
+    refresh();
+  }
+}
+// ask Claude / Codex for a new reading as soon as one of their shown windows has reset or
+// its reading went stale; each reading is tried once (the tool only knows the account that
+// is logged in now), and a fresh reading becomes eligible again once it goes stale
+// readings without an account (old Codex logs) belong to no one the tool can ask
+const autoCandidate = c => (c.expired || c.stale) && c.account !== '' && AUTO_TOOLS.includes(c.vendor) && autoTried[limKey(c)] !== c.measured_at;
+function autoRefresh(cards) {
+  if (document.hidden) return;
+  for (const tool of AUTO_TOOLS) {
+    const due = cards.filter(c => c.vendor === tool && autoCandidate(c));
+    if (due.length && !toolBusy[tool] && !toolRetryAt[tool]) refreshTool(tool, true, due);
   }
 }
 function selectLimit(k) {
   setState({lim: k});
-  document.querySelectorAll('#limCards .lcard').forEach(el => el.classList.toggle('sel', el.dataset.k === k));
+  document.querySelectorAll('#limCards [data-k]').forEach(el => el.classList.toggle('sel', el.dataset.k === k));
   renderLimitChart().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
 }
 function onCardActivate(el, handler) {
-  const go = ev => { const card = ev.target.closest('.lcard[data-k]'); if (card) handler(card.dataset.k); };
+  const go = ev => { const card = ev.target.closest('[data-k]'); if (card) handler(card.dataset.k); };
   el.addEventListener('click', go);
   el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(ev); } });
 }
@@ -745,7 +849,9 @@ function init() {
     setState({lr: b.dataset.h === '168' ? '168' : ''});
     renderLimitChart().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
   });
-  $('agyRefresh').addEventListener('click', refreshAgy);
+  $('claudeRefresh').addEventListener('click', () => refreshTool('claude'));
+  $('codexRefresh').addEventListener('click', () => refreshTool('codex'));
+  $('agyRefresh').addEventListener('click', () => refreshTool('agy'));
   // collapsible cards, remembered per browser
   let collapsed = new Set();
   try { collapsed = new Set(JSON.parse(localStorage.getItem('au-collapsed') || '[]')); } catch (e) { /* storage unavailable */ }

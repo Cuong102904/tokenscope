@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::model::Vendor;
 use rusqlite::{Connection, params};
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Two measurements belong to the same window when their `resets_at` differ
 /// by at most this much (Codex reports it with ±1 s jitter).
@@ -14,9 +15,10 @@ const ETA_LOOKBACK_SECS: i64 = 3600;
 const ETA_MIN_POINTS: usize = 3;
 const ETA_MIN_SPAN_SECS: i64 = 600;
 
+/// An account with no reading for this many days is no longer shown.
+pub const FORGET_AFTER_DAYS: i64 = 30;
 pub const EXPIRED_NOTE: &str = "reset, waiting for a new reading";
-pub const NO_DATA_NOTE: &str =
-    "No rate-limit data yet. Run `tokenscope statusline --print-snippet`";
+pub const NO_DATA_NOTE: &str = "No rate-limit data yet. Click Refresh Claude on the Limits tab, or add the status line: `tokenscope statusline --print-snippet`";
 pub const UNKNOWN_ACCOUNT_LABEL: &str = "old logs without an account ID";
 const STALE_ETA_NOTE: &str = "reading is stale, no ETA";
 const MIXED_REASON: &str = "readings mix accounts or are noisy";
@@ -118,9 +120,45 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
             warning: None,
         })
     })?;
+    let rows: Vec<LimitCard> = rows.collect::<Result<_, _>>()?;
+    // An account's plan is the one on its newest reading. Windows last seen under another
+    // plan (a monthly window from before a free -> plus upgrade, say) no longer apply.
+    let mut plan_now: HashMap<(&str, &str), (i64, Option<&str>)> = HashMap::new();
+    for c in &rows {
+        let e = plan_now
+            .entry((c.vendor.as_str(), c.account.as_str()))
+            .or_insert((i64::MIN, None));
+        if c.measured_at > e.0 && c.plan_type.is_some() {
+            *e = (c.measured_at, c.plan_type.as_deref());
+        }
+    }
+    let current_plan = |c: &LimitCard| match (
+        c.plan_type.as_deref(),
+        plan_now.get(&(c.vendor.as_str(), c.account.as_str())),
+    ) {
+        (Some(p), Some((_, Some(now_p)))) => p == *now_p,
+        _ => true,
+    };
+    // Accounts not read for FORGET_AFTER_DAYS are gone from view (old account-less Codex
+    // logs, an account no longer used); their history stays in the database.
+    let mut newest: HashMap<(&str, &str), i64> = HashMap::new();
+    for c in &rows {
+        let e = newest
+            .entry((c.vendor.as_str(), c.account.as_str()))
+            .or_insert(i64::MIN);
+        *e = (*e).max(c.measured_at);
+    }
+    let recent = |c: &LimitCard| {
+        newest[&(c.vendor.as_str(), c.account.as_str())] >= now - FORGET_AFTER_DAYS * 86400
+    };
+    let rows: Vec<LimitCard> = rows
+        .iter()
+        .filter(|c| current_plan(c) && recent(c))
+        .cloned()
+        .collect();
     let mut cards = vec![];
     for c in rows {
-        let mut c = c?;
+        let mut c = c;
         c.account_label = account_label(cfg, &c.vendor, &c.account);
         c.stale = now - c.measured_at > stale_after_secs(c.window_minutes);
         c.expired = c.resets_at.is_some_and(|r| r < now);
