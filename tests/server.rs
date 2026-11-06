@@ -415,3 +415,71 @@ async fn api_limits_refresh_agy() {
     let (s, _) = get_with(&st, "/api/limits?refresh=other", &[("x-tokenscope", "1")]).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
+
+/// Both setup sessions written just now, so both are "active".
+fn seed_active(st: &AppState) {
+    let now = chrono::Utc::now().timestamp();
+    let c = db::open(&st.paths.db()).unwrap();
+    for (v, s, p) in [
+        ("claude", "s1", "/home/u/proj"),
+        ("codex", "c1", "/home/u/other"),
+    ] {
+        c.execute(
+            "INSERT INTO sessions(vendor,session_id,project,title,source_path,last_write) VALUES(?1,?2,?3,NULL,'x',?4)",
+            rusqlite::params![v, s, p, now],
+        )
+        .unwrap();
+    }
+}
+
+fn vendors_of(v: &Value) -> Vec<String> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["vendor"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn active_follows_filters_but_sources_do_not() {
+    let (_d, st) = setup();
+    seed_active(&st);
+    let all = json(&st, "/api/active").await;
+    assert_eq!(vendors_of(&all["sessions"]).len(), 2, "{all}");
+    let v = json(&st, "/api/active?vendor=codex").await;
+    assert_eq!(vendors_of(&v["sessions"]), ["codex"]);
+    assert_eq!(
+        v["sources"], all["sources"],
+        "data sources are not filtered"
+    );
+    let p = json(&st, "/api/active?project=/home/u/proj").await;
+    assert_eq!(vendors_of(&p["sessions"]), ["claude"]);
+    let m = json(&st, "/api/active?model=claude-fable-5-1").await;
+    assert_eq!(vendors_of(&m["sessions"]), ["claude"]);
+    let o = json(&st, "/api/overview?vendor=codex").await;
+    assert_eq!(o["active_count"], 1);
+}
+
+#[tokio::test]
+async fn limits_follow_the_vendor_filter() {
+    let (_d, st) = setup();
+    seed_limits(&st);
+    let v = json(&st, "/api/limits?vendor=codex").await;
+    assert_eq!(vendors_of(&v["cards"]), ["codex"]);
+    assert_eq!(v["events"].as_array().unwrap().len(), 1);
+    let c = json(&st, "/api/limits?vendor=claude").await;
+    assert_eq!(vendors_of(&c["cards"]), ["claude"]);
+    assert_eq!(c["events"].as_array().unwrap().len(), 0);
+    let o = json(&st, "/api/overview?vendor=codex").await;
+    assert_eq!(vendors_of(&o["limits_mini"]), ["codex"]);
+}
+
+#[tokio::test]
+async fn meta_maps_models_to_vendors() {
+    let (_d, st) = setup();
+    let v = json(&st, "/api/meta").await;
+    assert_eq!(
+        v["model_vendors"],
+        serde_json::json!({"claude-fable-5-1": ["claude"], "no-such-model": ["codex"]})
+    );
+}

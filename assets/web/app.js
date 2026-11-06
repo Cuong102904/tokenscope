@@ -75,6 +75,13 @@ function apiQuery(extra) {
   return p.toString();
 }
 const currentTab = () => { const h = location.hash.slice(1); return TABS.includes(h) ? h : 'overview'; };
+const vendorQuery = () => new URLSearchParams(urlState().vendor ? {vendor: urlState().vendor} : {}).toString();
+// Filters that mean something on each tab; the others are greyed out there.
+const TAB_FILTERS = {limits: ['vendor'], active: ['vendor', 'model', 'project']};
+const FILTER_NAME = {days: 'time range', vendor: 'vendor', model: 'model', project: 'project'};
+let modelVendors = {};
+// models used by `vendor` (all models when no vendor is selected)
+const modelsFor = (models, vendor) => vendor ? models.filter(m => m && (modelVendors[m] || []).includes(vendor)) : models;
 
 // ---------- colours (fixed categorical order; colour follows the entity) ----------
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -271,7 +278,7 @@ function renderLimitCards(el, cards, mini) {
 
 let limCards = [];
 async function renderLimits(data) {
-  const d = data || await getJson('/api/limits');
+  const d = data || await getJson('/api/limits?' + vendorQuery());
   limCards = d.cards;
   renderLimitCards($('limCards'), d.cards, false);
   $('tLimEvents').innerHTML = '<thead><tr>' + ['Time', 'Vendor', 'Account', 'Scope', 'Resets at']
@@ -350,7 +357,7 @@ async function refreshAgy() {
   b.disabled = true;
   $('agyMsg').textContent = 'Running agy /usage… (up to 30 seconds)';
   try {
-    const r = await fetch('/api/limits?refresh=agy', {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
+    const r = await fetch('/api/limits?refresh=agy&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
     const d = await r.json();
     $('agyMsg').textContent = agyText(d.refresh);
@@ -590,7 +597,7 @@ const agoShort = ts => { const d = Math.max(0, Math.round(nowSec() - ts)); retur
 const th = (h, l) => `<th${l ? ' class="l"' : ''}>${esc(h)}</th>`;
 const td = (v, l) => `<td${l ? ' class="l"' : ''}>${esc(v)}</td>`;
 async function renderActive() {
-  const d = await getJson('/api/active');
+  const d = await getJson('/api/active?' + apiQuery());
   const ss = d.sessions;
   $('actCount').textContent = plural(ss.length, 'session') + ' · refreshes every 10 s';
   $('tActive').innerHTML = '<thead><tr>' + [['Vendor', 1], ['Project', 1], ['Model', 1], ['Updated', 0], ['Cost so far', 0], ['Cost, last hour', 0]]
@@ -620,10 +627,11 @@ async function loadMeta() {
   const m = await getJson('/api/meta');
   const st = urlState();
   fillSelect($('vendor'), m.vendors, st.vendor);
-  fillSelect($('model'), m.models, st.model);
+  modelVendors = m.model_vendors || {};
+  fillSelect($('model'), modelsFor(m.models, st.vendor), st.model);
   buildProjLabels(m.projects.concat(st.project ? [st.project] : []));
   fillSelect($('project'), m.projects, st.project, projName);
-  $('project').title = st.project || '';
+  if (!$('project').disabled) $('project').title = st.project || '';
 }
 
 // ---------- router + refresh ----------
@@ -634,6 +642,12 @@ function showTab() {
   document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== tab);
   document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (!RENDER[tab]) $('warn').hidden = true;
+  const used = TAB_FILTERS[tab] || FILTERS;
+  for (const k of FILTERS) {
+    const off = !used.includes(k);
+    $(k).disabled = off;
+    $(k).title = off ? `The ${FILTER_NAME[k]} filter does not apply to this tab` : (k === 'project' ? urlState().project : '');
+  }
   return tab;
 }
 // The tab switch is immediate; data loads are serialised. A request made while
@@ -693,7 +707,13 @@ function init() {
   if (![...$('days').options].some(o => o.value === st.days)) st.days = DEFAULT_DAYS;
   $('days').value = st.days;
   writeUrl(st);
-  for (const k of FILTERS) $(k).addEventListener('change', () => { setState({[k]: $(k).value}); refresh(); });
+  for (const k of FILTERS) $(k).addEventListener('change', () => {
+    const patch = {[k]: $(k).value};
+    // a model the new vendor never used would only ever give empty results
+    if (k === 'vendor' && !modelsFor([urlState().model], patch.vendor).length) patch.model = '';
+    setState(patch);
+    refresh();
+  });
   window.addEventListener('hashchange', refresh);
   $('tSess').addEventListener('click', ev => {
     const th = ev.target.closest('th');

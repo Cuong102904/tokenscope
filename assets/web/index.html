@@ -37,6 +37,7 @@
   h1 { font-size:20px; margin:0; }
   .filters { display:flex; flex-wrap:wrap; gap:8px; min-width:0; max-width:100%; }
   select { background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; max-width:100%; min-width:0; }
+  select:disabled { opacity:.45; cursor:not-allowed; }
   #project { max-width:220px; }
   nav.tabs { display:flex; gap:4px; overflow-x:auto; border-bottom:1px solid var(--line); margin-bottom:10px; scrollbar-width:thin; }
   nav.tabs a { flex:none; padding:8px 12px; color:var(--mute); text-decoration:none; border-bottom:2px solid transparent; white-space:nowrap; }

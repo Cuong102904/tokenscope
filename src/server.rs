@@ -168,18 +168,22 @@ where
 }
 
 /// Fixed windows (today / 7 / 30 days); vendor, model and project filters still apply.
-/// `limits_mini` is the same card list as `/api/limits`; `active_count` counts `/api/active` (unfiltered).
+/// `limits_mini` is the same card list as `/api/limits?vendor=…`; `active_count` counts `/api/active` with the same filter.
 async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
     let f = p.filter()?;
     with_db(st, move |c, st| {
-        let w = |days| Filter { days: Some(days), ..f.clone() };
+        let w = |days| Filter {
+            days: Some(days),
+            ..f.clone()
+        };
+        let now = chrono::Utc::now().timestamp();
         Ok(serde_json::json!({
             "totals_today": cost::totals(c, &st.prices, &w(1))?,
             "totals_7d": cost::totals(c, &st.prices, &w(7))?,
             "totals_30d": cost::totals(c, &st.prices, &w(30))?,
-            "active_count": active::list(c, &st.prices, &st.cfg, chrono::Utc::now().timestamp())?.len(),
+            "active_count": active_filtered(c, st, &f, now)?.len(),
             "daily": cost::daily(c, &st.prices, &w(30))?,
-            "limits_mini": limits::current(c, &st.cfg, chrono::Utc::now().timestamp())?,
+            "limits_mini": of_vendor(limits::current(c, &st.cfg, now)?, &f.vendor, |x| &x.vendor),
         }))
     })
     .await
@@ -226,11 +230,41 @@ async fn skills_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiR
 }
 
 /// `{ active_minutes, sessions, sources }`; not narrowed by the filters (it is "what runs now").
-async fn active_api(State(st): State<AppState>) -> ApiResult {
-    with_db(st, |c, st| {
+/// Rows whose vendor is `vendor` (all rows when no vendor is selected).
+fn of_vendor<T>(mut rows: Vec<T>, vendor: &Option<String>, key: impl Fn(&T) -> &String) -> Vec<T> {
+    if let Some(v) = vendor {
+        rows.retain(|r| key(r) == v);
+    }
+    rows
+}
+
+/// Active sessions matching the vendor / project / model filter (`days` does not apply:
+/// "active" is always the last `active_minutes`). A session's model is its latest one.
+fn active_filtered(
+    c: &rusqlite::Connection,
+    st: &AppState,
+    f: &Filter,
+    now: i64,
+) -> anyhow::Result<Vec<active::ActiveSession>> {
+    let mut v = of_vendor(active::list(c, &st.prices, &st.cfg, now)?, &f.vendor, |s| {
+        &s.vendor
+    });
+    if let Some(p) = &f.project {
+        v.retain(|s| &s.project == p);
+    }
+    if let Some(m) = &f.model {
+        v.retain(|s| s.model.as_ref() == Some(m));
+    }
+    Ok(v)
+}
+
+/// Active sessions follow the filters; `sources` (collector status) never does.
+async fn active_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
+    let f = p.filter()?;
+    with_db(st, move |c, st| {
         Ok(serde_json::json!({
             "active_minutes": st.cfg.active_minutes,
-            "sessions": active::list(c, &st.prices, &st.cfg, chrono::Utc::now().timestamp())?,
+            "sessions": active_filtered(c, st, &f, chrono::Utc::now().timestamp())?,
             "sources": active::sources(c),
         }))
     })
@@ -252,6 +286,8 @@ struct Meta {
     vendors: Vec<String>,
     models: Vec<String>,
     projects: Vec<String>,
+    /// model -> vendors that used it, so the model list can follow the vendor filter
+    model_vendors: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Distinct values over all data, not narrowed by the current filter (so a selection can always be undone).
@@ -264,7 +300,20 @@ async fn meta(State(st): State<AppState>) -> ApiResult {
             let v = s.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
             Ok(v)
         };
-        Ok(Meta { vendors: distinct("vendor")?, models: distinct("model")?, projects: distinct("project")? })
+        let mut model_vendors = std::collections::BTreeMap::<String, Vec<String>>::new();
+        let mut s = c.prepare(
+            "SELECT DISTINCT model, vendor FROM usage WHERE model IS NOT NULL AND model <> '' ORDER BY model, vendor",
+        )?;
+        for r in s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (m, v) = r?;
+            model_vendors.entry(m).or_default().push(v);
+        }
+        Ok(Meta {
+            vendors: distinct("vendor")?,
+            models: distinct("model")?,
+            projects: distinct("project")?,
+            model_vendors,
+        })
     })
     .await
 }
@@ -278,6 +327,8 @@ const REFRESH_HEADER: &str = "x-tokenscope";
 #[derive(Debug, Default, Deserialize)]
 struct LimitsParams {
     refresh: Option<String>,
+    /// Only this vendor's cards and events (other filters don't apply to limits).
+    vendor: Option<String>,
 }
 
 /// `{ cards, events }`, plus `refresh: {status, next_allowed?, message?}` with
@@ -301,11 +352,13 @@ async fn limits_api(
             return ApiError::BadRequest(format!("unknown refresh: {other}")).into_response();
         }
     };
+    let vendor = p.vendor.filter(|v| !v.is_empty());
     let res = with_db(st, move |c, st| {
         let now = chrono::Utc::now().timestamp();
+        let events = limits::events(c, &st.cfg, now - LIMIT_EVENT_DAYS * 86400)?;
         let mut v = serde_json::json!({
-            "cards": limits::current(c, &st.cfg, now)?,
-            "events": limits::events(c, &st.cfg, now - LIMIT_EVENT_DAYS * 86400)?,
+            "cards": of_vendor(limits::current(c, &st.cfg, now)?, &vendor, |x| &x.vendor),
+            "events": of_vendor(events, &vendor, |x| &x.vendor),
         });
         if let Some(r) = refresh {
             v["refresh"] = r;
