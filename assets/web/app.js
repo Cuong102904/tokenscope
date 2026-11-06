@@ -96,10 +96,11 @@ function chartBase() {
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
   return {mute, grid, ink, surface: css('--card')};
 }
-// Charts are kept and updated in place. Destroying and re-creating them on every
-// refresh blanked the canvas, killed an open tooltip and re-ran the grow animation;
-// that animation needs animation frames, which hidden or throttled tabs don't get,
-// so the chart could stay empty or half drawn.
+// Charts never animate and are updated in place. Animations only run on animation
+// frames, which hidden, occluded or throttled tabs don't get: a chart created or
+// re-created there stayed empty or half drawn until F5, and re-creating on every
+// refresh also killed an open tooltip and re-grew the bars.
+Chart.defaults.animation = false;
 const chartSig = {};
 function draw(id, cfg) {
   const old = charts[id];
@@ -112,10 +113,9 @@ function draw(id, cfg) {
     old.update('none'); // synchronous redraw, no animation frames needed
     return;
   }
-  // inline plugins close over the old data, so those charts are rebuilt, but never animated
+  // inline plugins close over the old data, so those charts are rebuilt (drawn synchronously)
   if (old) old.destroy();
-  const animate = !old && !document.hidden; // only a chart's first appearance animates
-  charts[id] = new Chart($(id), animate ? cfg : {...cfg, options: {...cfg.options, animation: false}});
+  charts[id] = new Chart($(id), cfg);
 }
 function undraw(id) {
   if (charts[id]) { charts[id].destroy(); delete charts[id]; }
@@ -297,7 +297,7 @@ const resetLines = (xs, color) => ({id: 'resetLines', afterDatasetsDraw(ch) {
   ctx.restore();
 }});
 
-let limToken = 0, limChartSig = '', limChartKey = '';
+let limToken = 0, limChartSig = '';
 async function renderLimitChart() {
   const my = ++limToken;
   const st = urlState();
@@ -321,13 +321,12 @@ async function renderLimitChart() {
   const view = st.lim + '|' + hours;
   const sig = JSON.stringify([view, h, col, c.mute, c.grid]);
   if (sig === limChartSig && charts.cLimit) return;
-  const animate = view !== limChartKey; // animate only a new selection, never a data refresh
-  limChartSig = sig; limChartKey = view;
+  limChartSig = sig;
   draw('cLimit', {
     type: 'line',
     data: {datasets: [{label: '% used', data: h.points.map(([t, v]) => ({x: t * 1000, y: v})),
       borderColor: col, backgroundColor: col, borderWidth: 2, pointRadius: h.points.length < 60 ? 2 : 0, pointHoverRadius: 5, tension: 0}]},
-    options: {responsive: true, maintainAspectRatio: false, ...(animate ? {} : {animation: false}), interaction: {mode: 'nearest', axis: 'x', intersect: false},
+    options: {responsive: true, maintainAspectRatio: false, interaction: {mode: 'nearest', axis: 'x', intersect: false},
       scales: {
         x: {type: 'linear', min: from, max: now, ticks: {maxTicksLimit: 6, callback: v => fmtTs(v / 1000)}, grid: {display: false}},
         y: {min: 0, max: 100, ticks: {callback: v => v + '%'}, grid: {color: c.grid}},
@@ -490,7 +489,6 @@ async function renderSkills() {
   const sig = JSON.stringify([d, c.mute, c.grid, c.ink, css('--s1'), css('--s2'), css('--s3'), css('--other')]);
   if (sig === skSig && charts.cSkCost) return;
   skSig = sig;
-  const noAnim = charts.cSkCost ? {animation: false} : {}; // data refresh on an already drawn tab: no re-animation
   // writes `fmt(value)` just past the end of each bar (single-series charts)
   const valueLabels = fmt => ({id: 'valueLabels', afterDatasetsDraw(ch) {
     const {ctx} = ch;
@@ -507,7 +505,7 @@ async function renderSkills() {
   const hbar = (id, wrap, labels, datasets, extra) => {
     hHeight(wrap, labels.length);
     draw(id, {type: 'bar', data: {labels, datasets},
-      options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false, ...noAnim,
+      options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false,
         scales: {x: {beginAtZero: true, grid: {color: c.grid}, ...(extra.x || {})}, y: {grid: {display: false}, ticks: {color: c.ink}, ...(extra.y || {})}},
         plugins: {legend: extra.legend || {display: false}, tooltip: {callbacks: extra.tooltip}}},
       plugins: extra.labels ? [valueLabels(extra.labels)] : []});
@@ -538,7 +536,7 @@ async function renderSkills() {
       priced: rest.reduce((a, p) => a + p.priced_cost, 0), color: css('--other')});
     draw('cSkPlugin', {type: 'doughnut',
       data: {labels: rows.map(r => r.name), datasets: [{data: rows.map(r => r.priced), backgroundColor: rows.map(r => r.color), borderColor: c.surface, borderWidth: 2}]},
-      options: {responsive: true, maintainAspectRatio: false, cutout: '62%', ...noAnim,
+      options: {responsive: true, maintainAspectRatio: false, cutout: '62%',
         plugins: {legend: {...legendCfg(c), labels: {...legendCfg(c).labels,
           generateLabels: ch => Chart.overrides.doughnut.plugins.legend.labels.generateLabels(ch).map((l, i) => ({...l, fontColor: c.ink,
             text: rows[i].name + ' ' + costText(rows[i].cost, rows[i].priced)}))}},
