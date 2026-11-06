@@ -82,7 +82,7 @@ pub fn list(
     Ok(out)
 }
 
-/// One row of "Nguồn dữ liệu": the last run's status (`records` = new rows of that run) plus
+/// One row of "Data sources": the last run's status (`records` = new rows of that run) plus
 /// what is stored in total.
 #[derive(Debug, Clone, Serialize)]
 pub struct SourceRow {

@@ -1,9 +1,13 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tokenscope</title>
+<script>
+  // apply the saved theme before the first paint, so a dark choice never flashes light
+  try { const t = localStorage.getItem('tokenscope-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
   :root {
     color-scheme: light;
@@ -73,6 +77,8 @@
   button { background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; cursor:pointer; }
   button:disabled { opacity:.6; cursor:progress; }
   button.on { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  button.theme { white-space:nowrap; display:inline-flex; align-items:center; gap:6px; }
+  button.theme svg { width:14px; height:14px; flex:none; }
   .lim-group { margin-bottom:12px; }
   .lim-group h3 { font-size:13px; margin:0 0 6px; color:var(--mute); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
   .lim-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; }
@@ -83,7 +89,7 @@
   .lcard.nodata { cursor:default; }
   .mini .lcard { padding:9px 10px; }
   .lhead { display:flex; gap:6px; align-items:baseline; justify-content:space-between; min-width:0; }
-  .lhead .sc { font-weight:600; }
+  .lhead .sc { font-weight:600; flex:0 0 auto; max-width:70%; }
   .lhead .ac { color:var(--mute); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .badge { flex:none; font-size:10px; font-weight:700; padding:1px 5px; border-radius:4px; border:1px solid var(--amber); color:var(--amber); }
   .lval { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; margin:2px 0 4px; }
@@ -104,85 +110,86 @@
   <header>
     <h1>tokenscope</h1>
     <div class="filters">
-      <select id="days" aria-label="Khoảng thời gian">
-        <option value="1">Hôm nay</option><option value="7">7 ngày</option><option value="30">30 ngày</option>
-        <option value="90">90 ngày</option><option value="all">Tất cả</option>
+      <select id="days" aria-label="Time range">
+        <option value="1">Today</option><option value="7">7 days</option><option value="30">30 days</option>
+        <option value="90">90 days</option><option value="all">All time</option>
       </select>
-      <select id="vendor" aria-label="Hãng"><option value="">Mọi hãng</option></select>
-      <select id="model" aria-label="Model"><option value="">Mọi model</option></select>
-      <select id="project" aria-label="Project"><option value="">Mọi project</option></select>
+      <select id="vendor" aria-label="Vendor"><option value="">All vendors</option></select>
+      <select id="model" aria-label="Model"><option value="">All models</option></select>
+      <select id="project" aria-label="Project"><option value="">All projects</option></select>
+      <button id="theme" type="button" class="theme"></button>
     </div>
   </header>
   <nav class="tabs" id="tabs">
-    <a href="#overview" data-tab="overview">Tổng quan</a>
-    <a href="#limits" data-tab="limits">Hạn mức</a>
-    <a href="#cost" data-tab="cost">Chi phí</a>
-    <a href="#sessions" data-tab="sessions">Session</a>
-    <a href="#skills" data-tab="skills">Skill &amp; công cụ</a>
-    <a href="#active" data-tab="active">Đang chạy</a>
+    <a href="#overview" data-tab="overview">Overview</a>
+    <a href="#limits" data-tab="limits">Limits</a>
+    <a href="#cost" data-tab="cost">Cost</a>
+    <a href="#sessions" data-tab="sessions">Sessions</a>
+    <a href="#skills" data-tab="skills">Skills &amp; tools</a>
+    <a href="#active" data-tab="active">Active</a>
   </nav>
-  <p class="note">Ước tính theo giá API, không phải hoá đơn. <span id="status"></span></p>
+  <p class="note">Estimates at API list prices, not your bill. <span id="status"></span></p>
   <p id="warn" class="note warn" hidden></p>
 
   <main>
     <div data-pane="overview" hidden>
       <div class="kpis" id="ovKpis"></div>
-      <section class="card" data-sec="ov-daily"><h2>Chi phí theo ngày theo model <span class="t">30 ngày</span></h2>
-        <div class="body"><div class="chart"><canvas id="cOvDaily" role="img" aria-label="Chi phí theo ngày theo model, 30 ngày"></canvas></div></div></section>
-      <section class="card" data-sec="ov-limits"><h2>Hạn mức</h2><div class="body" id="ovLimits"></div></section>
+      <section class="card" data-sec="ov-daily"><h2>Daily cost by model <span class="t">30 days</span></h2>
+        <div class="body"><div class="chart"><canvas id="cOvDaily" role="img" aria-label="Daily cost by model, last 30 days"></canvas></div></div></section>
+      <section class="card" data-sec="ov-limits"><h2>Rate limits</h2><div class="body" id="ovLimits"></div></section>
     </div>
 
     <div data-pane="cost" hidden>
       <div class="kpis" id="costKpis"></div>
-      <section class="card" data-sec="cost-daily"><h2>Chi phí theo ngày theo model</h2>
-        <div class="body"><div class="chart"><canvas id="cCostDaily" role="img" aria-label="Chi phí theo ngày theo model"></canvas></div></div></section>
+      <section class="card" data-sec="cost-daily"><h2>Daily cost by model</h2>
+        <div class="body"><div class="chart"><canvas id="cCostDaily" role="img" aria-label="Daily cost by model"></canvas></div></div></section>
       <div class="grid">
-        <section class="card" data-sec="cost-vendor"><h2>Theo hãng</h2>
-          <div class="body"><div class="chart short"><canvas id="cVendor" role="img" aria-label="Chi phí theo hãng"></canvas></div></div></section>
-        <section class="card" data-sec="cost-project"><h2>Top 10 project</h2>
-          <div class="body"><div class="chart short"><canvas id="cProject" role="img" aria-label="Top 10 project theo chi phí"></canvas></div></div></section>
+        <section class="card" data-sec="cost-vendor"><h2>By vendor</h2>
+          <div class="body"><div class="chart short"><canvas id="cVendor" role="img" aria-label="Cost by vendor"></canvas></div></div></section>
+        <section class="card" data-sec="cost-project"><h2>Top 10 projects</h2>
+          <div class="body"><div class="chart short"><canvas id="cProject" role="img" aria-label="Top 10 projects by cost"></canvas></div></div></section>
       </div>
-      <section class="card" data-sec="cost-models"><h2>Theo model</h2><div class="body scroll"><table id="tModels"></table></div></section>
+      <section class="card" data-sec="cost-models"><h2>By model</h2><div class="body scroll"><table id="tModels"></table></div></section>
     </div>
 
     <div data-pane="sessions" hidden>
-      <section class="card" data-sec="sess-table"><h2>Session <span class="t" id="sessCount"></span></h2>
+      <section class="card" data-sec="sess-table"><h2>Sessions <span class="t" id="sessCount"></span></h2>
         <div class="body scroll"><table id="tSess"></table></div></section>
-      <section class="card" data-sec="sess-timeline"><h2>Chi phí tích luỹ <span class="t" id="tlTitle">bấm một dòng ở bảng trên</span></h2>
+      <section class="card" data-sec="sess-timeline"><h2>Cumulative cost <span class="t" id="tlTitle">click a row in the table above</span></h2>
         <div class="body"><p id="tlNote" class="note warn" hidden></p>
-          <div class="chart short"><canvas id="cTimeline" role="img" aria-label="Chi phí tích luỹ của session"></canvas></div></div></section>
+          <div class="chart short"><canvas id="cTimeline" role="img" aria-label="Cumulative cost of the session"></canvas></div></div></section>
     </div>
 
     <div data-pane="limits" hidden>
-      <div class="lim-actions"><button id="agyRefresh" type="button">Làm mới agy</button><span id="agyMsg" class="note" style="margin:0"></span></div>
+      <div class="lim-actions"><button id="agyRefresh" type="button">Refresh agy</button><span id="agyMsg" class="note" style="margin:0"></span></div>
       <div id="limCards"></div>
-      <section class="card" data-sec="lim-chart"><h2>% đã dùng theo thời gian <span class="t" id="limChartTitle">bấm một thẻ ở trên</span></h2>
-        <div class="body"><div class="seg" id="limRange"><button type="button" data-h="24">24 giờ</button><button type="button" data-h="168">7 ngày</button></div>
-          <div class="chart short"><canvas id="cLimit" role="img" aria-label="Phần trăm hạn mức đã dùng theo thời gian, vạch đứt là lúc reset"></canvas></div></div></section>
-      <section class="card" data-sec="lim-events"><h2>Các lần chạm giới hạn <span class="t">30 ngày</span></h2><div class="body scroll"><table id="tLimEvents"></table></div></section>
+      <section class="card" data-sec="lim-chart"><h2>% used over time <span class="t" id="limChartTitle">click a card above</span></h2>
+        <div class="body"><div class="seg" id="limRange"><button type="button" data-h="24">24 hours</button><button type="button" data-h="168">7 days</button></div>
+          <div class="chart short"><canvas id="cLimit" role="img" aria-label="Percent of the limit used over time; dashed lines mark resets"></canvas></div></div></section>
+      <section class="card" data-sec="lim-events"><h2>Limit hits <span class="t">30 days</span></h2><div class="body scroll"><table id="tLimEvents"></table></div></section>
     </div>
     <div data-pane="skills" hidden>
-      <p class="note">Bộ lọc model/project: chi phí lọc trực tiếp; số lần gọi/đọc và công cụ lọc theo session có tin nhắn khớp.</p>
+      <p class="note">Model/project filters: costs are filtered directly; call/read counts and tools are filtered by sessions that have a matching message.</p>
       <div class="grid">
-        <section class="card" data-sec="sk-cost"><h2>Top 15 skill theo chi phí <span class="t">Claude</span></h2>
-          <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkCost"><canvas id="cSkCost" role="img" aria-label="Top 15 skill theo chi phí"></canvas></div>
-            <p class="note">Đo bằng cách nào: tổng giá các tin nhắn Claude được gắn nhãn attributionSkill, tức tin nhắn tạo ra trong lúc skill hoạt động.</p></div></section>
-        <section class="card" data-sec="sk-plugin"><h2>Chi phí theo plugin <span class="t">Claude</span></h2>
-          <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkPlugin"><canvas id="cSkPlugin" role="img" aria-label="Chi phí theo plugin"></canvas></div>
+        <section class="card" data-sec="sk-cost"><h2>Top 15 skills by cost <span class="t">Claude</span></h2>
+          <div class="body"><div class="empty" hidden>No data.</div><div class="chart" id="wSkCost"><canvas id="cSkCost" role="img" aria-label="Top 15 skills by cost"></canvas></div>
+            <p class="note">How it's measured: total cost of Claude messages tagged with attributionSkill, i.e. messages produced while the skill was active.</p></div></section>
+        <section class="card" data-sec="sk-plugin"><h2>Cost by plugin <span class="t">Claude</span></h2>
+          <div class="body"><div class="empty" hidden>No data.</div><div class="chart" id="wSkPlugin"><canvas id="cSkPlugin" role="img" aria-label="Cost by plugin"></canvas></div>
             <p class="note" id="skPluginNa" hidden></p>
-            <p class="note">Đo bằng cách nào: cùng các tin nhắn như biểu đồ bên cạnh, gom theo attributionPlugin.</p></div></section>
+            <p class="note">How it's measured: the same messages as the chart next to it, grouped by attributionPlugin.</p></div></section>
       </div>
-      <section class="card" data-sec="sk-count"><h2>Số lần gọi / đọc skill</h2>
-        <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkCount"><canvas id="cSkCount" role="img" aria-label="Số lần gọi hoặc đọc theo skill, tách theo hãng"></canvas></div>
-          <p class="note">Đo bằng cách nào: Claude đếm lần gọi công cụ Skill. Codex: đếm số lần đọc SKILL.md — xếp hạng tương đối.</p></div></section>
-      <section class="card" data-sec="sk-tools"><h2>Top 20 công cụ <span class="t">số lần gọi</span></h2>
-        <div class="body"><div class="empty" hidden>Không có dữ liệu.</div><div class="chart" id="wSkTools"><canvas id="cSkTools" role="img" aria-label="Top 20 công cụ theo số lần gọi"></canvas></div>
-          <p class="note">Đo bằng cách nào: số lần gọi công cụ (Claude tool_use, Codex function_call / custom_tool_call). Màu theo hãng.</p></div></section>
+      <section class="card" data-sec="sk-count"><h2>Skill calls / reads</h2>
+        <div class="body"><div class="empty" hidden>No data.</div><div class="chart" id="wSkCount"><canvas id="cSkCount" role="img" aria-label="Calls or reads per skill, split by vendor"></canvas></div>
+          <p class="note">How it's measured: Claude counts Skill tool calls. Codex counts reads of SKILL.md, so treat it as a relative ranking.</p></div></section>
+      <section class="card" data-sec="sk-tools"><h2>Top 20 tools <span class="t">by calls</span></h2>
+        <div class="body"><div class="empty" hidden>No data.</div><div class="chart" id="wSkTools"><canvas id="cSkTools" role="img" aria-label="Top 20 tools by call count"></canvas></div>
+          <p class="note">How it's measured: number of tool calls (Claude tool_use, Codex function_call / custom_tool_call). Colored by vendor.</p></div></section>
     </div>
     <div data-pane="active" hidden>
-      <section class="card" data-sec="act-now"><h2>Phiên đang chạy <span class="t" id="actCount"></span></h2>
+      <section class="card" data-sec="act-now"><h2>Active sessions <span class="t" id="actCount"></span></h2>
         <div class="body scroll"><table id="tActive"></table></div></section>
-      <section class="card" data-sec="act-src"><h2>Nguồn dữ liệu</h2>
+      <section class="card" data-sec="act-src"><h2>Data sources</h2>
         <div class="body scroll"><table id="tSources"></table></div></section>
     </div>
   </main>

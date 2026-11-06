@@ -150,7 +150,7 @@ fn show_appends_today_cost_on_new_line() {
         STDIN,
         &[],
     );
-    assert_eq!(out, "OLD\n5h 44% · tuần 54% · $12.00 hôm nay\n");
+    assert_eq!(out, "OLD\n5h 44% · week 54% · $12.00 today\n");
     // wrapped output without trailing newline still gets its own line
     let (_, out, _) = run(
         h.path(),
@@ -158,17 +158,17 @@ fn show_appends_today_cost_on_new_line() {
         STDIN,
         &[],
     );
-    assert_eq!(out, "OLD\n5h 44% · tuần 54% · $12.00 hôm nay\n");
+    assert_eq!(out, "OLD\n5h 44% · week 54% · $12.00 today\n");
 }
 
 #[test]
 fn show_omits_money_when_stale_or_missing() {
     let h = tempfile::tempdir().unwrap();
     let (_, out, _) = run(h.path(), &["statusline", "--show"], STDIN, &[]);
-    assert_eq!(out, "5h 44% · tuần 54%\n");
+    assert_eq!(out, "5h 44% · week 54%\n");
     write_today(h.path(), "2000-01-01");
     let (_, out, _) = run(h.path(), &["statusline", "--show"], STDIN, &[]);
-    assert_eq!(out, "5h 44% · tuần 54%\n");
+    assert_eq!(out, "5h 44% · week 54%\n");
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn show_with_partial_limits() {
         r#"{"rate_limits":{"seven_day":{"used_percentage":7.4,"resets_at":1}}}"#,
         &[],
     );
-    assert_eq!(out, "tuần 7%\n");
+    assert_eq!(out, "week 7%\n");
 }
 
 #[test]

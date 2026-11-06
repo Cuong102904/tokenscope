@@ -137,10 +137,10 @@ fn summary(paths: Option<&Paths>, five: Option<Window>, seven: Option<Window>) -
         parts.push(format!("5h {:.0}%", w.used));
     }
     if let Some(w) = seven {
-        parts.push(format!("tuần {:.0}%", w.used));
+        parts.push(format!("week {:.0}%", w.used));
     }
     if let Some(c) = paths.and_then(today_cost) {
-        parts.push(format!("{c} hôm nay"));
+        parts.push(format!("{c} today"));
     }
     parts.join(" · ")
 }

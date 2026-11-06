@@ -246,7 +246,7 @@ async fn serves_index_without_cdn() {
     let (_d, st) = setup();
     let (s, body) = get(&st, "/").await;
     assert_eq!(s, StatusCode::OK);
-    assert!(body.contains("Ước tính theo giá API, không phải hoá đơn."));
+    assert!(body.contains("Estimates at API list prices, not your bill."));
     let srcs: Vec<&str> = body
         .split("<script")
         .skip(1)
@@ -351,10 +351,7 @@ async fn api_limits_shape() {
     assert!(cards[0]["eta"].is_i64(), "{}", cards[0]);
     assert_eq!(cards[1]["expired"], true);
     assert_eq!(cards[1]["stale"], true);
-    assert_eq!(
-        cards[1]["account_label"],
-        "log cũ không phân biệt tài khoản"
-    );
+    assert_eq!(cards[1]["account_label"], "old logs without an account ID");
     assert_eq!(v["events"].as_array().unwrap().len(), 1);
     assert!(v.get("refresh").is_none());
     let o = json(&st, "/api/overview").await;

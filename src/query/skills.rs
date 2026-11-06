@@ -120,7 +120,7 @@ pub fn by_cost(
     Ok(v)
 }
 
-/// Cost by plugin; messages with a skill but no plugin are grouped under "(không có plugin)".
+/// Cost by plugin; messages with a skill but no plugin are grouped under "(no plugin)".
 pub fn by_plugin(
     conn: &Connection,
     prices: &PriceTable,
@@ -148,7 +148,7 @@ pub fn by_plugin(
     Ok(v)
 }
 
-const NO_PLUGIN: &str = "(không có plugin)";
+const NO_PLUGIN: &str = "(no plugin)";
 
 /// `(" WHERE ...", params)` for an events table (`ts` epoch, no day/model/project column).
 fn events_where(f: &Filter) -> (String, Vec<Value>) {
