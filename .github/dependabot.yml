@@ -1,0 +1,30 @@
+# Weekly dependency update PRs. Minor and patch bumps are grouped into one PR per
+# ecosystem; major bumps come one per PR so they can be reviewed on their own.
+# PRs go through CI like any other; main is protected, so nothing merges itself.
+# Not covered: assets/web/chart.umd.min.js is vendored and updated by hand.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Ho_Chi_Minh
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      rust-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Asia/Ho_Chi_Minh
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
