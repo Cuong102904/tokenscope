@@ -4,6 +4,16 @@
 
 tokenscope reads the session logs that Claude Code, OpenAI Codex CLI, OpenCode and Antigravity (`agy`) already write to your disk. It turns them into token counts, estimated cost per session, project and model, and rate-limit usage over time. Everything runs on your machine. Nothing is uploaded, and no API keys are needed.
 
+![tokenscope overview: daily cost by model and rate limits per account](docs/screenshots/overview-light.png)
+
+## Screenshots
+
+These use made-up demo data (`scripts/demo/`); nothing in them is a real project or account.
+
+| Rate limits, one row per account (dark theme) | Cost by day, vendor, project and model |
+|---|---|
+| ![Limits tab](docs/screenshots/limits-dark.png) | ![Cost tab](docs/screenshots/cost-light.png) |
+
 ## Why
 
 If you use several coding agents on subscriptions, it's hard to answer simple questions:
@@ -168,6 +178,8 @@ cargo test --all-targets
 ```
 
 CI runs the same three checks (plus `shellcheck install.sh`) on every pull request. `main` is protected: changes land through pull requests with a green CI.
+
+To refresh the README screenshots after a UI change, run `scripts/demo/screenshots.sh`. It seeds made-up data into a throwaway HOME, serves it without your `claude`/`codex`/`agy` on PATH and captures `docs/screenshots/*.png` with headless Chrome (needs python3, node 22+ and google-chrome).
 
 To release: bump `version` in `Cargo.toml`, merge, then push a matching tag (`git tag v0.2.0 && git push customer v0.2.0`). The release workflow tests, builds the static x86_64 and aarch64 binaries and publishes them with checksums to GitHub Releases, where `install.sh` picks them up.
 
