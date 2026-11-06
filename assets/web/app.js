@@ -343,29 +343,32 @@ async function renderLimitChart() {
   });
 }
 
-function agyText(r) {
+// On-demand limits read by running the tool's own `/usage` (`claude` or `agy`).
+const TOOL_NAME = {claude: 'Claude', agy: 'agy'};
+function refreshText(tool, r) {
   if (!r) return '';
+  const n = TOOL_NAME[tool];
   switch (r.status) {
-    case 'ran': return 'Refreshed agy at ' + fmtClock() + '.';
-    case 'throttled': return 'agy ran recently (at most once every 5 minutes). Try again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
-    case 'not_installed': return 'The agy command was not found on PATH.';
-    default: return 'agy refresh failed: ' + (r.message || r.status);
+    case 'ran': return 'Refreshed ' + n + ' at ' + fmtClock() + '.';
+    case 'throttled': return n + ' was refreshed recently (at most once every 5 minutes). Try again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
+    case 'not_installed': return 'The ' + tool + ' command was not found on PATH.';
+    default: return n + ' refresh failed: ' + (r.message || r.status);
   }
 }
-async function refreshAgy() {
-  const b = $('agyRefresh');
-  b.disabled = true;
-  $('agyMsg').textContent = 'Running agy /usage… (up to 30 seconds)';
+async function refreshTool(tool) {
+  const buttons = document.querySelectorAll('.lim-actions button');
+  buttons.forEach(b => b.disabled = true); // one run at a time
+  $('refreshMsg').textContent = 'Running ' + tool + ' /usage… (up to 30 seconds)';
   try {
-    const r = await fetch('/api/limits?refresh=agy&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
+    const r = await fetch('/api/limits?refresh=' + tool + '&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
     const d = await r.json();
-    $('agyMsg').textContent = agyText(d.refresh);
+    $('refreshMsg').textContent = refreshText(tool, d.refresh);
     if (currentTab() === 'limits') await renderLimits(d);
   } catch (e) {
-    $('agyMsg').textContent = 'agy refresh failed: ' + e.message;
+    $('refreshMsg').textContent = TOOL_NAME[tool] + ' refresh failed: ' + e.message;
   } finally {
-    b.disabled = false;
+    buttons.forEach(b => b.disabled = false);
   }
 }
 function selectLimit(k) {
@@ -745,7 +748,8 @@ function init() {
     setState({lr: b.dataset.h === '168' ? '168' : ''});
     renderLimitChart().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
   });
-  $('agyRefresh').addEventListener('click', refreshAgy);
+  $('claudeRefresh').addEventListener('click', () => refreshTool('claude'));
+  $('agyRefresh').addEventListener('click', () => refreshTool('agy'));
   // collapsible cards, remembered per browser
   let collapsed = new Set();
   try { collapsed = new Set(JSON.parse(localStorage.getItem('au-collapsed') || '[]')); } catch (e) { /* storage unavailable */ }

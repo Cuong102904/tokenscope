@@ -91,7 +91,7 @@ tokenscope serve     # open http://127.0.0.1:8765
 | `tokenscope collect --watch [--interval N]` | Keeps collecting every N seconds. Use this if you only use the TUI or status line. |
 | `tokenscope serve [--port 8765]` | Starts the web dashboard on `127.0.0.1`. |
 | `tokenscope tui` | Starts the terminal dashboard. `r` refreshes, `q` quits. |
-| `tokenscope status [--json] [--refresh]` | Prints a one-shot summary. `--refresh` also asks `agy` for its weekly limits (at most once every 5 minutes). |
+| `tokenscope status [--json] [--refresh]` | Prints a one-shot summary. `--refresh` also asks `claude` and `agy` for their limits through `/usage` (each at most once every 5 minutes). |
 | `tokenscope statusline …` | Wraps the Claude Code status line (see below). |
 
 ## Where the data comes from
@@ -99,16 +99,23 @@ tokenscope serve     # open http://127.0.0.1:8765
 | Agent | Source | Notes |
 |---|---|---|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | Tokens and cost per message. |
-| Claude Code limits | status line snapshots | Claude only reports rate limits to the status line, so you need the status line hook below. |
+| Claude Code limits | `claude -p --no-session-persistence "/usage"`, and optionally status line snapshots | `/usage` runs on demand only (Refresh Claude button or `status --refresh`, at most once every 5 minutes) and saves no session. The status line hook below adds a reading on every message. |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | Tokens plus the rate-limit info Codex logs. |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Opened read-only. |
 | Antigravity | `agy -p "/usage"` | Run on demand only, at most once every 5 minutes. |
 
 Log files are only read, never modified.
 
-## Claude Code rate limits (status line)
+## Claude Code rate limits
 
-Claude Code sends its 5-hour and weekly usage only to the status line command. To capture it:
+Claude Code keeps its 5-hour and weekly usage on Anthropic's side; no local log has it. tokenscope reads it in two ways, and neither touches your Claude credentials:
+
+- **On demand:** the **Refresh Claude** button on the Limits tab (or `tokenscope status --refresh`) runs `claude -p --no-session-persistence "/usage"` and reads the 5-hour, weekly and per-model weekly numbers it prints. It runs at most once every 5 minutes, takes a few seconds and doesn't count as a Claude session.
+- **Continuously (optional):** Claude Code also passes the same numbers to the status line command on every message. With the status line hook you get a reading per message, which is enough for the projected time-to-limit.
+
+The `/usage` output is text meant for people. If a Claude Code update changes its wording, the refresh reports an error instead of showing wrong numbers.
+
+To add the status line hook:
 
 1. Print the snippet:
 

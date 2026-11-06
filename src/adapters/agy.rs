@@ -1,42 +1,25 @@
 //! Antigravity (`agy`): weekly limits only, and only on demand via `refresh`
 //! (running `agy -p "/usage"` may consume quota, so `collect` never runs it).
+pub use super::refresh::RefreshOutcome;
+use super::refresh::{resolve, throttle};
 use super::{Adapter, CollectCtx, Discovery};
 use crate::config::Config;
 use crate::model::{Batch, LimitSnapshot, Vendor, sha8};
 use crate::paths::Paths;
 use crate::safety;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 const KV_LAST_REFRESH: &str = "agy:last_refresh";
-const MIN_INTERVAL_SECS: i64 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const SOURCE: &str = "agy /usage";
 const AUTH_MARKER: &str = "applyAuthResult: email=";
 const LOG_TAIL_BYTES: u64 = 4 * 1024 * 1024;
 
 pub struct AgyAdapter;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RefreshOutcome {
-    Ran,
-    Throttled { next_allowed: i64 },
-    NotInstalled,
-}
-
-/// Resolve `bin` (a path, or a name looked up on `$PATH`) to an existing file.
-fn resolve(bin: &Path) -> Option<PathBuf> {
-    if bin.components().count() > 1 {
-        return bin.is_file().then(|| bin.to_path_buf());
-    }
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join(bin))
-        .find(|p| p.is_file())
-}
 
 impl Adapter for AgyAdapter {
     fn vendor(&self) -> Vendor {
@@ -172,26 +155,9 @@ pub fn refresh_with_timeout(
     let Some(bin) = resolve(bin) else {
         return Ok(RefreshOutcome::NotInstalled);
     };
-    let last: Option<i64> = conn
-        .query_row(
-            "SELECT value FROM kv WHERE key=?1",
-            params![KV_LAST_REFRESH],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-        .and_then(|v| v.parse().ok());
-    if let Some(last) = last
-        && now - last < MIN_INTERVAL_SECS
-    {
-        return Ok(RefreshOutcome::Throttled {
-            next_allowed: last + MIN_INTERVAL_SECS,
-        });
+    if let Some(throttled) = throttle(conn, KV_LAST_REFRESH, now)? {
+        return Ok(throttled);
     }
-    // stamp before running: a failed or timed-out run must not be retried in a tight loop
-    conn.execute(
-        "INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)",
-        params![KV_LAST_REFRESH, now.to_string()],
-    )?;
     let mut cmd = Command::new(&bin);
     cmd.args(["-p", "/usage"]);
     let out = crate::statusline::run_with_timeout(cmd, b"", timeout).ok_or_else(|| {

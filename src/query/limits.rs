@@ -15,8 +15,7 @@ const ETA_MIN_POINTS: usize = 3;
 const ETA_MIN_SPAN_SECS: i64 = 600;
 
 pub const EXPIRED_NOTE: &str = "reset, waiting for a new reading";
-pub const NO_DATA_NOTE: &str =
-    "No rate-limit data yet. Run `tokenscope statusline --print-snippet`";
+pub const NO_DATA_NOTE: &str = "No rate-limit data yet. Click Refresh Claude on the Limits tab, or add the status line: `tokenscope statusline --print-snippet`";
 pub const UNKNOWN_ACCOUNT_LABEL: &str = "old logs without an account ID";
 const STALE_ETA_NOTE: &str = "reading is stale, no ETA";
 const MIXED_REASON: &str = "readings mix accounts or are noisy";
