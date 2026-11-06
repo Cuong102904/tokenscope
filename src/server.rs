@@ -332,7 +332,7 @@ struct LimitsParams {
 }
 
 /// `{ cards, events }`, plus `refresh: {status, next_allowed?, message?}` with
-/// `?refresh=agy` or `?refresh=claude`. A failed refresh is reported there; the cards still load.
+/// `?refresh=agy`, `?refresh=claude` or `?refresh=codex`. A failed refresh is reported there; the cards still load.
 async fn limits_api(
     State(st): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -340,7 +340,7 @@ async fn limits_api(
 ) -> Response {
     let refresh = match p.refresh.as_deref() {
         None | Some("") => None,
-        Some(tool @ ("agy" | "claude")) if !headers.contains_key(REFRESH_HEADER) => {
+        Some(tool @ ("agy" | "claude" | "codex")) if !headers.contains_key(REFRESH_HEADER) => {
             return (
                 StatusCode::FORBIDDEN,
                 format!("refresh={tool} needs the {REFRESH_HEADER} header"),
@@ -351,6 +351,7 @@ async fn limits_api(
         Some("claude") => {
             Some(run_refresh(st.clone(), crate::adapters::claude_usage::refresh).await)
         }
+        Some("codex") => Some(run_refresh(st.clone(), crate::adapters::codex_usage::refresh).await),
         Some(other) => {
             return ApiError::BadRequest(format!("unknown refresh: {other}")).into_response();
         }
@@ -378,7 +379,7 @@ type RefreshFn = fn(
     &mut rusqlite::Connection,
 ) -> anyhow::Result<crate::adapters::refresh::RefreshOutcome>;
 
-/// A `/usage` refresh (`agy` or `claude`) on the blocking pool with its own writable
+/// An on-demand limits refresh (`agy`, `claude` or `codex`) on the blocking pool with its own writable
 /// connection; never fails the request.
 async fn run_refresh(st: AppState, refresh: RefreshFn) -> serde_json::Value {
     use crate::adapters::refresh::RefreshOutcome;

@@ -3,6 +3,7 @@ pub mod claude;
 pub mod claude_snapshots;
 pub mod claude_usage;
 pub mod codex;
+pub mod codex_usage;
 pub mod opencode;
 pub mod refresh;
 

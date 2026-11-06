@@ -255,8 +255,9 @@ function limitCard(c, mini) {
     // the number belongs to the previous window: shown muted and labelled, never as current
     const p = Math.max(0, Math.min(100, Number(c.used_percent)));
     const next = toolBusy[c.vendor] ? '<span class="spin" aria-hidden="true"></span>Updating…'
-      : TOOL_NAME[c.vendor] && !AUTO_TOOLS.includes(c.vendor) ? 'Click Refresh ' + esc(TOOL_NAME[c.vendor]) + ' for a new reading'
-      : !AUTO_TOOLS.includes(c.vendor) ? 'Waiting for ' + esc(vendorName(c.vendor)) + ' to log a new reading'
+      : autoTried[limKey(c)] === c.measured_at ? (c.vendor === 'codex'
+        ? 'Not the signed-in Codex account: waiting for its logs' : 'No newer reading from ' + esc(TOOL_NAME[c.vendor]) + ' yet')
+      : !autoCandidate(c) ? (TOOL_NAME[c.vendor] ? 'Click Refresh ' + esc(TOOL_NAME[c.vendor]) + ' for a new reading' : 'Waiting for a new reading')
       : toolRetryAt[c.vendor] ? 'Updates at ' + esc(fmtTs(toolRetryAt[c.vendor])) + ' · ' + esc(until(toolRetryAt[c.vendor]))
       : 'Waiting for a new reading';
     body = `<div class="lval old">${esc(fmtPct(c.used_percent))} <span class="lmeta">before the reset</span></div>` +
@@ -354,13 +355,16 @@ async function renderLimitChart() {
   });
 }
 
-// On-demand limits read by running the tool's own `/usage` (`claude` or `agy`).
+// On-demand limits: `claude /usage`, `codex app-server` and `agy /usage`.
 // A card whose window has reset updates itself: the tool is asked right away, or
 // when the server's 5-minute throttle allows, and the card says which.
-const TOOL_NAME = {claude: 'Claude', agy: 'agy'};
-// Only Claude refreshes on its own: its /usage costs no tokens. agy's may use quota and
-// it reports a reset seconds after each reading, so it would re-run every 5 minutes.
-const AUTO_TOOLS = ['claude'];
+const TOOL_NAME = {claude: 'Claude', codex: 'Codex', agy: 'agy'};
+// Claude and Codex refresh on their own: neither read calls a model. agy's may use quota
+// and it reports a reset seconds after each reading, so it would re-run every 5 minutes.
+const AUTO_TOOLS = ['claude', 'codex'];
+// card key -> measured_at of the reading a successful auto refresh did not replace (another
+// account than the logged-in one, say): that reading is not retried again
+const autoTried = {};
 const toolBusy = {}, toolRetryAt = {}, toolTimer = {};
 let ovCards = [];
 function refreshText(tool, r) {
@@ -383,7 +387,7 @@ function retryAt(tool, at) {
   toolRetryAt[tool] = at;
   toolTimer[tool] = setTimeout(() => { toolRetryAt[tool] = null; refresh(); }, Math.max(1000, at * 1000 - Date.now() + 1000));
 }
-async function refreshTool(tool, auto) {
+async function refreshTool(tool, auto, cards) {
   if (toolBusy[tool]) return;
   toolBusy[tool] = true;
   $(tool + 'Refresh').disabled = true;
@@ -395,7 +399,10 @@ async function refreshTool(tool, auto) {
     const res = (await r.json()).refresh;
     $('refreshMsg').textContent = refreshText(tool, res);
     if (res?.status === 'throttled') retryAt(tool, res.next_allowed);
-    else if (res?.status === 'ran') { clearTimeout(toolTimer[tool]); toolRetryAt[tool] = null; }
+    else if (res?.status === 'ran') {
+      clearTimeout(toolTimer[tool]); toolRetryAt[tool] = null;
+      for (const c of cards || []) autoTried[limKey(c)] = c.measured_at;
+    }
     else retryAt(tool, nowSec() + 300); // not installed or failed: try again later, not on every refresh
   } catch (e) {
     $('refreshMsg').textContent = TOOL_NAME[tool] + ' refresh failed: ' + e.message;
@@ -406,11 +413,14 @@ async function refreshTool(tool, auto) {
     refresh();
   }
 }
-// ask Claude for a new reading as soon as one of its shown windows has reset
+// ask Claude / Codex for a new reading as soon as one of their shown windows has reset;
+// each reading is tried once (the tool only knows the account that is logged in now)
+const autoCandidate = c => c.expired && AUTO_TOOLS.includes(c.vendor) && autoTried[limKey(c)] !== c.measured_at;
 function autoRefresh(cards) {
   if (document.hidden) return;
   for (const tool of AUTO_TOOLS) {
-    if (!toolBusy[tool] && !toolRetryAt[tool] && cards.some(c => c.vendor === tool && c.expired)) refreshTool(tool, true);
+    const due = cards.filter(c => c.vendor === tool && autoCandidate(c));
+    if (due.length && !toolBusy[tool] && !toolRetryAt[tool]) refreshTool(tool, true, due);
   }
 }
 function selectLimit(k) {
@@ -791,6 +801,7 @@ function init() {
     renderLimitChart().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
   });
   $('claudeRefresh').addEventListener('click', () => refreshTool('claude'));
+  $('codexRefresh').addEventListener('click', () => refreshTool('codex'));
   $('agyRefresh').addEventListener('click', () => refreshTool('agy'));
   // collapsible cards, remembered per browser
   let collapsed = new Set();

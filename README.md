@@ -91,7 +91,7 @@ tokenscope serve     # open http://127.0.0.1:8765
 | `tokenscope collect --watch [--interval N]` | Keeps collecting every N seconds. Use this if you only use the TUI or status line. |
 | `tokenscope serve [--port 8765]` | Starts the web dashboard on `127.0.0.1`. |
 | `tokenscope tui` | Starts the terminal dashboard. `r` refreshes, `q` quits. |
-| `tokenscope status [--json] [--refresh]` | Prints a one-shot summary. `--refresh` also asks `claude` and `agy` for their limits through `/usage` (each at most once every 5 minutes). |
+| `tokenscope status [--json] [--refresh]` | Prints a one-shot summary. `--refresh` also asks `claude`, `codex` and `agy` for their current limits (each at most once every 5 minutes). |
 | `tokenscope statusline …` | Wraps the Claude Code status line (see below). |
 
 ## Where the data comes from
@@ -101,10 +101,13 @@ tokenscope serve     # open http://127.0.0.1:8765
 | Claude Code | `~/.claude/projects/**/*.jsonl` | Tokens and cost per message. |
 | Claude Code limits | `claude -p --no-session-persistence "/usage"`, and optionally status line snapshots | `/usage` runs on demand only (Refresh Claude button or `status --refresh`, at most once every 5 minutes) and saves no session. The status line hook below adds a reading on every message. |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | Tokens plus the rate-limit info Codex logs. |
+| Codex limits | `codex app-server` (`account/rateLimits/read`) | On demand (Refresh Codex button or `status --refresh`, at most once every 5 minutes). Structured JSON, no model call; only the signed-in account. |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Opened read-only. |
 | Antigravity | `agy -p "/usage"` | Run on demand only, at most once every 5 minutes. |
 
 Log files are only read, never modified.
+
+When a Claude or Codex window resets, the dashboard keeps the old number (muted, "before the reset") and asks the tool for a new reading on its own; agy is refreshed only by its button, because its `/usage` may use quota.
 
 ## Claude Code rate limits
 

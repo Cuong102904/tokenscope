@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
 use tokenscope::adapters::refresh::RefreshOutcome;
-use tokenscope::adapters::{agy, claude_usage};
+use tokenscope::adapters::{agy, claude_usage, codex_usage};
 use tokenscope::collect::{self, AdapterStatus};
 use tokenscope::config::Config;
 use tokenscope::db;
@@ -65,7 +65,7 @@ enum Cmd {
     Status {
         #[arg(long)]
         json: bool,
-        /// Also ask `claude` and `agy` for their limits via `/usage` (each at most once per 5 minutes)
+        /// Also ask `claude`, `codex` and `agy` for their current limits (each at most once per 5 minutes)
         #[arg(long)]
         refresh: bool,
     },
@@ -213,7 +213,7 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Status { json, refresh } => {
             let (mut conn, cfg, _) = collect_once(&paths)?;
-            // `--refresh` asks both CLIs for their limits (each at most once per 5 minutes)
+            // `--refresh` asks each CLI for its limits (each at most once per 5 minutes)
             let note = |name: &str, r: anyhow::Result<RefreshOutcome>| match r {
                 Ok(RefreshOutcome::Ran) => None,
                 Ok(RefreshOutcome::Throttled { next_allowed }) => Some(format!(
@@ -222,13 +222,14 @@ fn main() -> anyhow::Result<()> {
                 Ok(RefreshOutcome::NotInstalled) => Some(format!("{name}: not found on PATH")),
                 Err(e) => Some(format!("{name}: refresh failed: {e:#}")),
             };
-            let (agy_note, claude_note) = if refresh {
+            let (agy_note, claude_note, codex_note) = if refresh {
                 (
                     note("agy", agy::refresh(&paths, &cfg, &mut conn)),
                     note("claude", claude_usage::refresh(&paths, &cfg, &mut conn)),
+                    note("codex", codex_usage::refresh(&paths, &cfg, &mut conn)),
                 )
             } else {
-                (None, None)
+                (None, None, None)
             };
             let prices = PriceTable::load(&paths)?;
             let t = |f: Filter| cost::totals(&conn, &prices, &f);
@@ -254,6 +255,8 @@ fn main() -> anyhow::Result<()> {
                     v["agy"] =
                         serde_json::json!({"snapshots": snaps(Vendor::Agy), "note": agy_note});
                     v["claude"] = serde_json::json!({"snapshots": snaps(Vendor::Claude), "note": claude_note});
+                    v["codex"] =
+                        serde_json::json!({"snapshots": snaps(Vendor::Codex), "note": codex_note});
                 }
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
@@ -274,6 +277,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 if refresh {
                     print_limits(&conn, Vendor::Claude, claude_note.as_deref());
+                    print_limits(&conn, Vendor::Codex, codex_note.as_deref());
                     print_limits(&conn, Vendor::Agy, agy_note.as_deref());
                 }
                 println!("{DISCLAIMER}");

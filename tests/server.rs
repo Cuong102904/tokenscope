@@ -507,3 +507,24 @@ async fn api_limits_refresh_claude() {
         assert_eq!(v["refresh"]["next_allowed"], now + 300);
     }
 }
+
+#[tokio::test]
+async fn api_limits_refresh_codex() {
+    let (_d, st) = setup();
+    // a recent refresh stamp: the real `codex` must never run in tests
+    let now = chrono::Utc::now().timestamp();
+    db::open(&st.paths.db())
+        .unwrap()
+        .execute(
+            "INSERT OR REPLACE INTO kv(key,value) VALUES('codex:last_refresh',?1)",
+            [now.to_string()],
+        )
+        .unwrap();
+    let (s, _) = get(&st, "/api/limits?refresh=codex").await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "same-origin header required");
+    let (s, b) = get_with(&st, "/api/limits?refresh=codex", &[("x-tokenscope", "1")]).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let v: Value = serde_json::from_str(&b).unwrap();
+    let status = v["refresh"]["status"].as_str().unwrap();
+    assert!(["throttled", "not_installed"].contains(&status), "{v}");
+}
