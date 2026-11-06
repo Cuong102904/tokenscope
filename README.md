@@ -27,9 +27,32 @@ Each vendor shows part of this in a different place, or not at all. tokenscope p
 - **Privacy.** Account IDs are stored only as short hashes. Credential files are never opened. The web server binds to `127.0.0.1` only and rejects foreign `Host` headers.
 - **Single binary.** Data lives in SQLite (bundled) and the web assets are embedded. There is no runtime to install.
 
+## Supported platforms
+
+**Linux only.** macOS and Windows are not supported and not planned. Log paths, the status line wrapper (`sh`) and the agent CLIs are assumed to follow Linux conventions.
+
+| | Supported | Tested on |
+|---|---|---|
+| OS | Linux, x86_64, glibc | Ubuntu 24.04 LTS (kernel 7.0, glibc 2.39). CI also runs on GitHub's `ubuntu-latest`. |
+| Architecture | x86_64 | aarch64 should build from source but is untested. |
+| Rust (build only) | 1.85+ (edition 2024) | 1.99.1 |
+| Browser (web dashboard) | any current browser | Chrome 154, Firefox 159 |
+| Terminal (TUI) | any terminal with 256 colors | bash on GNOME Terminal |
+
+Supported agents and the versions whose log formats were verified:
+
+| Agent | Verified version | Reads from |
+|---|---|---|
+| Claude Code | 2.1.318 | `~/.claude/projects/` and status line snapshots |
+| OpenAI Codex CLI | 0.165.0 | `~/.codex/sessions/` |
+| OpenCode | DB schema as of Nov 2026 | `~/.local/share/opencode/opencode.db` |
+| Antigravity (`agy`) | 1.5.1 | `agy -p "/usage"` |
+
+The agents' log formats are undocumented and can change in any release. If a newer agent version stops showing up, run `agent-usage doctor` and open an issue with the agent's version.
+
 ## Install
 
-Requires Rust 1.85+ (edition 2024).
+Requires Rust 1.85+ (edition 2024). The build has no other system dependencies, because SQLite is bundled.
 
 ```sh
 cargo install --git https://github.com/Cuong102904/tokenscope
