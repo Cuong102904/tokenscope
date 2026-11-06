@@ -115,16 +115,22 @@ pub fn stored_counts(conn: &Connection, vendor: Vendor) -> (i64, Option<i64>) {
 
 /// Stored status of every vendor that has run (kv `status:<vendor>`), in a fixed vendor order.
 pub fn sources(conn: &Connection) -> Vec<SourceRow> {
-    [Vendor::Claude, Vendor::Codex, Vendor::OpenCode, Vendor::Agy]
-        .into_iter()
-        .filter_map(|v| {
-            let status = collect::load_status(conn, v)?;
-            let (total_records, last_limit_at) = stored_counts(conn, v);
-            Some(SourceRow {
-                status,
-                total_records,
-                last_limit_at,
-            })
+    [
+        Vendor::Claude,
+        Vendor::Codex,
+        Vendor::OpenCode,
+        Vendor::Agy,
+        Vendor::Pi,
+    ]
+    .into_iter()
+    .filter_map(|v| {
+        let status = collect::load_status(conn, v)?;
+        let (total_records, last_limit_at) = stored_counts(conn, v);
+        Some(SourceRow {
+            status,
+            total_records,
+            last_limit_at,
         })
-        .collect()
+    })
+    .collect()
 }

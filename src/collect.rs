@@ -1,6 +1,7 @@
 use crate::adapters::{
     Adapter, CollectCtx, agy::AgyAdapter, claude::ClaudeAdapter,
     claude_snapshots::ClaudeSnapshotsAdapter, codex::CodexAdapter, opencode::OpenCodeAdapter,
+    pi::PiAdapter,
 };
 use crate::config::Config;
 use crate::db;
@@ -31,6 +32,7 @@ pub fn default_adapters() -> Vec<Box<dyn Adapter>> {
         Box::new(CodexAdapter),
         Box::new(OpenCodeAdapter),
         Box::new(AgyAdapter),
+        Box::new(PiAdapter),
     ]
 }
 

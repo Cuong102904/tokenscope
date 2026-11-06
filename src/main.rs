@@ -74,7 +74,13 @@ enum Cmd {
 }
 
 const DISCLAIMER: &str = "Estimates at API list prices, not your bill.";
-const ALL_VENDORS: [Vendor; 4] = [Vendor::Claude, Vendor::Codex, Vendor::OpenCode, Vendor::Agy];
+const ALL_VENDORS: [Vendor; 5] = [
+    Vendor::Claude,
+    Vendor::Codex,
+    Vendor::OpenCode,
+    Vendor::Agy,
+    Vendor::Pi,
+];
 
 fn collect_once(paths: &Paths) -> anyhow::Result<(Connection, Config, Vec<AdapterStatus>)> {
     let cfg = Config::load(paths)?;
