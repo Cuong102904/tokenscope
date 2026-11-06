@@ -5,10 +5,12 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const fmtMoney = v => '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
 const num = v => Number(v).toLocaleString('en-US');
 const pct = v => (v * 100).toLocaleString('en-US', {maximumFractionDigits:1}) + '%';
+// "1 session", "3 sessions"
+const plural = (n, w) => num(n) + ' ' + w + (Number(n) === 1 ? '' : 's');
 // cost: Option<f64> + priced lower bound -> "$1.00" | "≥ $0.50" | "n/a"
 const costText = (cost, priced) => cost != null ? fmtMoney(cost) : (priced > 0 ? '≥ ' + fmtMoney(priced) : 'n/a');
 const parts = p => String(p || '').split('/').filter(Boolean);
-const base = p => parts(p).slice(-1)[0] || String(p || '') || '(không rõ)';
+const base = p => parts(p).slice(-1)[0] || String(p || '') || '(unknown)';
 // Display label per project path: the last component, or the shortest
 // distinguishing suffix when several known projects share it ("worktrees/x" vs "DEV/x").
 let projLabels = new Map();
@@ -33,7 +35,14 @@ function buildProjLabels(paths) {
   projLabels = m;
 }
 const projName = p => projLabels.get(p) || base(p);
-const fmtTs = ts => new Date(ts * 1000).toLocaleString('vi-VN', {year:'2-digit', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+// "Nov 6, 14:05"; the year is added when it is not the current one
+const fmtTs = ts => {
+  const d = new Date(ts * 1000);
+  const o = {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'};
+  if (d.getFullYear() !== new Date().getFullYear()) o.year = 'numeric';
+  return d.toLocaleString('en-US', o);
+};
+const fmtClock = () => new Date().toLocaleTimeString('en-GB');
 const tickMoney = v => '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits: v < 10 ? 2 : 0});
 
 const TABS = ['overview', 'limits', 'cost', 'sessions', 'skills', 'active'];
@@ -66,11 +75,18 @@ function apiQuery(extra) {
   return p.toString();
 }
 const currentTab = () => { const h = location.hash.slice(1); return TABS.includes(h) ? h : 'overview'; };
+const vendorQuery = () => new URLSearchParams(urlState().vendor ? {vendor: urlState().vendor} : {}).toString();
+// Filters that mean something on each tab; the others are greyed out there.
+const TAB_FILTERS = {limits: ['vendor'], active: ['vendor', 'model', 'project']};
+const FILTER_NAME = {days: 'time range', vendor: 'vendor', model: 'model', project: 'project'};
+let modelVendors = {};
+// models used by `vendor` (all models when no vendor is selected)
+const modelsFor = (models, vendor) => vendor ? models.filter(m => m && (modelVendors[m] || []).includes(vendor)) : models;
 
 // ---------- colours (fixed categorical order; colour follows the entity) ----------
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const SLOTS = 8;
-const OTHER = 'Khác';
+const OTHER = 'Other';
 const slotOf = new Map();       // model name -> slot 1..8, assigned once per page load
 const VENDOR_SLOT = {claude: 2, codex: 3, opencode: 1, agy: 7};
 function modelColor(m) {
@@ -87,13 +103,34 @@ function chartBase() {
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
   return {mute, grid, ink, surface: css('--card')};
 }
+// Charts never animate and are updated in place. Animations only run on animation
+// frames, which hidden, occluded or throttled tabs don't get: a chart created or
+// re-created there stayed empty or half drawn until F5, and re-creating on every
+// refresh also killed an open tooltip and re-grew the bars.
+Chart.defaults.animation = false;
+const chartSig = {};
 function draw(id, cfg) {
-  if (charts[id]) charts[id].destroy();
+  const old = charts[id];
+  const sig = JSON.stringify([cfg.type, cfg.data, cfg.options]); // functions drop out: data + colours only
+  if (old && chartSig[id] === sig) return; // nothing changed: leave it (and its tooltip) alone
+  chartSig[id] = sig;
+  if (old && old.config.type === cfg.type && !(cfg.plugins || []).length) {
+    old.data = cfg.data;
+    old.options = cfg.options;
+    old.update('none'); // synchronous redraw, no animation frames needed
+    return;
+  }
+  // inline plugins close over the old data, so those charts are rebuilt (drawn synchronously)
+  if (old) old.destroy();
   charts[id] = new Chart($(id), cfg);
+}
+function undraw(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+  delete chartSig[id];
 }
 const legendCfg = c => ({position: 'bottom', labels: {color: c.ink, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded'}});
 
-// Stacked bars per day, one dataset per model; models past the 7th by total fold into "Khác".
+// Stacked bars per day, one dataset per model; models past the 7th by total fold into "Other".
 function drawDaily(id, daily) {
   const c = chartBase();
   const totals = {};
@@ -126,7 +163,7 @@ function drawDaily(id, daily) {
             footer: items => {
               const d = daily[items[0].dataIndex];
               const sum = Object.values(d.by_model).reduce((a, b) => a + b, 0);
-              return ['Tổng: ' + fmtMoney(sum)].concat(d.unpriced.length ? ['Chưa có giá (n/a): ' + d.unpriced.join(', ')] : []);
+              return ['Total: ' + fmtMoney(sum)].concat(d.unpriced.length ? ['No price (n/a): ' + d.unpriced.join(', ')] : []);
             },
           },
         },
@@ -142,16 +179,18 @@ function kpi(label, value, sub) {
 // same rule as Totals::display: '$X' fully priced, '≥ $X' partly priced, 'n/a' nothing priced
 const totalText = t => !t.unpriced_models.length ? fmtMoney(t.cost)
   : t.cost > 0 ? '≥ ' + fmtMoney(t.cost) : 'n/a';
-const totalSub = t => num(t.sessions) + ' session · ' + num(t.messages) + ' tin nhắn';
+const totalSub = t => plural(t.sessions, 'session') + ' · ' + plural(t.messages, 'message');
 
 function setWarn(unpriced) {
   const w = $('warn');
   w.hidden = !unpriced.length;
-  w.textContent = unpriced.length ? 'Model chưa có giá (hiện "n/a", không tính vào tổng): ' + unpriced.join(', ') : '';
+  w.textContent = unpriced.length ? 'Models without a price (shown as "n/a", not counted in totals): ' + unpriced.join(', ') : '';
 }
 
+// a request that never answers must not leave `busy` set forever (no more refreshes until F5)
+const FETCH_TIMEOUT_MS = 15000;
 async function getJson(path) {
-  const r = await fetch(path, {cache: 'no-store'});
+  const r = await fetch(path, {cache: 'no-store', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)});
   if (!r.ok) throw new Error(path + ': HTTP ' + r.status + ' ' + (await r.text()));
   return r.json();
 }
@@ -159,45 +198,45 @@ async function getJson(path) {
 async function renderOverview() {
   const d = await getJson('/api/overview?' + apiQuery());
   $('ovKpis').innerHTML = [
-    kpi('Hôm nay', totalText(d.totals_today), totalSub(d.totals_today)),
-    kpi('7 ngày', totalText(d.totals_7d), totalSub(d.totals_7d)),
-    kpi('30 ngày', totalText(d.totals_30d), totalSub(d.totals_30d)),
-    kpi('Đang chạy', num(d.active_count), 'session'),
+    kpi('Today', totalText(d.totals_today), totalSub(d.totals_today)),
+    kpi('7 days', totalText(d.totals_7d), totalSub(d.totals_7d)),
+    kpi('30 days', totalText(d.totals_30d), totalSub(d.totals_30d)),
+    kpi('Active now', num(d.active_count), Number(d.active_count) === 1 ? 'session' : 'sessions'),
   ].join('');
   setWarn(d.totals_30d.unpriced_models);
   drawDaily('cOvDaily', d.daily);
-  // dead accounts (expired and stale) only in the Hạn mức tab; the no-data placeholder stays
+  // dead accounts (expired and stale) only in the Limits tab; the no-data placeholder stays
   const shown = d.limits_mini.filter(c => c.no_data || !(c.expired && c.stale));
   const hidden = d.limits_mini.length - shown.length;
   renderLimitCards($('ovLimits'), shown, true);
-  if (hidden) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(hidden)} thẻ cũ — xem tab Hạn mức</a></div>`);
+  if (hidden) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(hidden)} old ${hidden === 1 ? 'card' : 'cards'} — see the Limits tab</a></div>`);
 }
 
 // ---------- limits ----------
 const VENDOR_NAME = {claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', agy: 'Antigravity (agy)'};
 const vendorName = v => VENDOR_NAME[v] || v;
-const SCOPE_BASE = {five_hour: '5 giờ', weekly: 'Tuần', seven_day: 'Tuần', monthly: 'Tháng'};
-// "five_hour" -> "5 giờ", "weekly:Gemini" -> "Tuần · Gemini", "x:window_90m" -> "90 phút · x"
+const SCOPE_BASE = {five_hour: '5-hour', weekly: 'Weekly', seven_day: 'Weekly', monthly: 'Monthly'};
+// "five_hour" -> "5-hour", "weekly:Gemini" -> "Weekly · Gemini", "x:window_90m" -> "90-min · x"
 function scopeLabel(scope) {
   const ps = String(scope).split(':');
   const i = ps.findIndex(p => SCOPE_BASE[p] || /^window_\d+m$/.test(p));
   if (i < 0) return String(scope);
-  const b = SCOPE_BASE[ps[i]] || ps[i].slice(7, -1) + ' phút';
+  const b = SCOPE_BASE[ps[i]] || ps[i].slice(7, -1) + '-min';
   const rest = ps.filter((_, j) => j !== i).join(':');
   return rest ? b + ' · ' + rest : b;
 }
 const fmtPct = v => Number(v).toLocaleString('en-US', {maximumFractionDigits: 1}) + '%';
 function dur(sec) {
   sec = Math.max(0, Math.round(sec));
-  if (sec < 60) return 'dưới 1 phút';
+  if (sec < 60) return 'under 1 min';
   const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
-  if (d) return d + ' ngày' + (h ? ' ' + h + ' giờ' : '');
-  if (h) return h + ' giờ' + (m ? ' ' + m + ' phút' : '');
-  return m + ' phút';
+  if (d) return d + 'd' + (h ? ' ' + h + 'h' : '');
+  if (h) return h + 'h' + (m ? ' ' + m + 'm' : '');
+  return m + ' min';
 }
 const nowSec = () => Date.now() / 1000;
-const until = ts => 'còn ' + dur(ts - nowSec());
-const ago = ts => nowSec() - ts < 60 ? 'vừa xong' : dur(nowSec() - ts) + ' trước';
+const until = ts => 'in ' + dur(ts - nowSec());
+const ago = ts => nowSec() - ts < 60 ? 'just now' : dur(nowSec() - ts) + ' ago';
 // bar level: green < 70, amber < 90, red >= 90 (the number is always shown too)
 const level = p => p >= 90 ? 'hi' : p >= 70 ? 'mid' : 'ok';
 const limKey = c => [c.vendor, c.account, c.scope].join('|');
@@ -208,24 +247,24 @@ function limitCard(c, mini) {
   const sel = !mini && limKey(c) === urlState().lim;
   const head = `<div class="lhead"><span class="sc">${esc(scopeLabel(c.scope))}</span>` +
     `<span class="ac" title="${esc(c.account_label)}">${esc(c.account_label)}</span>` +
-    (c.stale ? '<span class="badge" title="Số đo đã cũ, có thể không còn đúng">CŨ</span>' : '') + '</div>';
+    (c.stale ? '<span class="badge" title="This reading is old and may no longer be accurate">STALE</span>' : '') + '</div>';
   let body;
   if (c.expired) {
     // the last number belongs to the previous window: never show it as current
-    body = `<div class="lval reset">Đã reset, chờ số mới</div><div class="lmeta">Reset lúc ${esc(fmtTs(c.resets_at))} · ${esc(ago(c.resets_at))}</div>`;
+    body = `<div class="lval reset">Reset, waiting for a new reading</div><div class="lmeta">Reset at ${esc(fmtTs(c.resets_at))} · ${esc(ago(c.resets_at))}</div>`;
   } else {
     const p = Math.max(0, Math.min(100, Number(c.used_percent))), lv = level(p);
-    body = `<div class="lval ${lv}">${esc(fmtPct(c.used_percent))} <span class="lmeta">đã dùng</span></div>` +
-      `<div class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(p)}" aria-label="${esc(fmtPct(p) + ' đã dùng')}"><i class="${lv}" style="width:${esc(p)}%"></i></div>` +
+    body = `<div class="lval ${lv}">${esc(fmtPct(c.used_percent))} <span class="lmeta">used</span></div>` +
+      `<div class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${esc(p)}" aria-label="${esc(fmtPct(p) + ' used')}"><i class="${lv}" style="width:${esc(p)}%"></i></div>` +
       (c.resets_at != null ? `<div class="lmeta">Reset ${esc(fmtTs(c.resets_at))} · ${esc(until(c.resets_at))}</div>` : '');
   }
   const measured = mini
-    ? `<div class="lmeta">đo ${esc(ago(c.measured_at))}</div>`
-    : `<div class="lmeta">Đo lúc ${esc(fmtTs(c.measured_at))} (${esc(c.source)}) · ${esc(ago(c.measured_at))}${c.plan_type ? ' · gói ' + esc(c.plan_type) : ''}</div>`;
+    ? `<div class="lmeta">measured ${esc(ago(c.measured_at))}</div>`
+    : `<div class="lmeta">Measured ${esc(fmtTs(c.measured_at))} (${esc(c.source)}) · ${esc(ago(c.measured_at))}${c.plan_type ? ' · plan ' + esc(c.plan_type) : ''}</div>`;
   const eta = mini || c.expired ? '' : `<div class="lmeta">${c.eta != null
-    ? 'Dự kiến chạm 100%: ' + esc(fmtTs(c.eta)) + ' · ' + esc(until(c.eta))
-    : 'Không có ETA: ' + esc(c.eta_note)}</div>`;
-  const warn = c.warning ? `<div class="lwarn">Cảnh báo: ${esc(c.warning)}</div>` : '';
+    ? 'Projected to hit 100%: ' + esc(fmtTs(c.eta)) + ' · ' + esc(until(c.eta))
+    : 'No ETA: ' + esc(c.eta_note)}</div>`;
+  const warn = c.warning ? `<div class="lwarn">Warning: ${esc(c.warning)}</div>` : '';
   return `<div class="lcard${sel ? ' sel' : ''}" role="button" tabindex="0" data-k="${esc(limKey(c))}">${head}${body}${measured}${eta}${warn}</div>`;
 }
 
@@ -234,19 +273,19 @@ function renderLimitCards(el, cards, mini) {
   for (const c of cards) { if (!groups.has(c.vendor)) groups.set(c.vendor, []); groups.get(c.vendor).push(c); }
   el.innerHTML = groups.size ? [...groups].map(([v, cs]) =>
     `<div class="lim-group"><h3>${esc(vendorName(v))}</h3><div class="lim-grid${mini ? ' mini' : ''}">${cs.map(c => limitCard(c, mini)).join('')}</div></div>`).join('')
-    : '<div class="empty">Chưa có dữ liệu hạn mức.</div>';
+    : '<div class="empty">No rate-limit data yet.</div>';
 }
 
 let limCards = [];
 async function renderLimits(data) {
-  const d = data || await getJson('/api/limits');
+  const d = data || await getJson('/api/limits?' + vendorQuery());
   limCards = d.cards;
   renderLimitCards($('limCards'), d.cards, false);
-  $('tLimEvents').innerHTML = '<thead><tr>' + ['Thời điểm', 'Hãng', 'Tài khoản', 'Phạm vi', 'Reset lúc']
+  $('tLimEvents').innerHTML = '<thead><tr>' + ['Time', 'Vendor', 'Account', 'Scope', 'Resets at']
     .map(h => `<th class="l">${esc(h)}</th>`).join('') + '</tr></thead><tbody>' +
     (d.events.length ? d.events.map(e => `<tr><td class="l">${esc(fmtTs(e.ts))}</td><td class="l">${esc(vendorName(e.vendor))}</td>` +
       `<td class="l">${esc(e.account_label)}</td><td class="l">${esc(scopeLabel(e.scope))}</td><td class="l">${esc(e.resets_at != null ? fmtTs(e.resets_at) : '—')}</td></tr>`).join('')
-      : '<tr><td colspan="5" class="empty">Không có lần chạm giới hạn nào trong 30 ngày.</td></tr>') + '</tbody>';
+      : '<tr><td colspan="5" class="empty">No limit hits in the last 30 days.</td></tr>') + '</tbody>';
   await renderLimitChart();
 }
 
@@ -265,15 +304,15 @@ const resetLines = (xs, color) => ({id: 'resetLines', afterDatasetsDraw(ch) {
   ctx.restore();
 }});
 
-let limToken = 0, limChartSig = '', limChartKey = '';
+let limToken = 0, limChartSig = '';
 async function renderLimitChart() {
   const my = ++limToken;
   const st = urlState();
   const hours = st.lr === '168' ? 168 : 24;
   document.querySelectorAll('#limRange button').forEach(b => b.classList.toggle('on', b.dataset.h === String(hours)));
   if (!st.lim) {
-    $('limChartTitle').textContent = 'bấm một thẻ ở trên';
-    if (charts.cLimit) { charts.cLimit.destroy(); delete charts.cLimit; }
+    $('limChartTitle').textContent = 'click a card above';
+    undraw('cLimit');
     limChartSig = '';
     return;
   }
@@ -282,25 +321,24 @@ async function renderLimitChart() {
   const title = vendorName(k.vendor) + ' · ' + scopeLabel(k.scope) + ' · ' + (card ? card.account_label : k.account || '—');
   const h = await getJson('/api/limits/history?' + new URLSearchParams({...k, hours}));
   if (my !== limToken) return; // a later click owns the chart now
-  $('limChartTitle').textContent = title + (h.points.length ? '' : ' — không có số đo trong khoảng này');
+  $('limChartTitle').textContent = title + (h.points.length ? '' : ' — no readings in this range');
   const now = Date.now(), from = now - hours * 3600e3;
   const c = chartBase(), col = vendorColor(k.vendor);
   // the 30 s auto-refresh: same data and theme -> keep the chart as is (no flicker)
   const view = st.lim + '|' + hours;
   const sig = JSON.stringify([view, h, col, c.mute, c.grid]);
   if (sig === limChartSig && charts.cLimit) return;
-  const animate = view !== limChartKey; // animate only a new selection, never a data refresh
-  limChartSig = sig; limChartKey = view;
+  limChartSig = sig;
   draw('cLimit', {
     type: 'line',
-    data: {datasets: [{label: '% đã dùng', data: h.points.map(([t, v]) => ({x: t * 1000, y: v})),
+    data: {datasets: [{label: '% used', data: h.points.map(([t, v]) => ({x: t * 1000, y: v})),
       borderColor: col, backgroundColor: col, borderWidth: 2, pointRadius: h.points.length < 60 ? 2 : 0, pointHoverRadius: 5, tension: 0}]},
-    options: {responsive: true, maintainAspectRatio: false, ...(animate ? {} : {animation: false}), interaction: {mode: 'nearest', axis: 'x', intersect: false},
+    options: {responsive: true, maintainAspectRatio: false, interaction: {mode: 'nearest', axis: 'x', intersect: false},
       scales: {
         x: {type: 'linear', min: from, max: now, ticks: {maxTicksLimit: 6, callback: v => fmtTs(v / 1000)}, grid: {display: false}},
         y: {min: 0, max: 100, ticks: {callback: v => v + '%'}, grid: {color: c.grid}},
       },
-      plugins: {legend: {display: false}, tooltip: {callbacks: {title: items => fmtTs(items[0].parsed.x / 1000), label: it => fmtPct(it.parsed.y) + ' đã dùng'}}}},
+      plugins: {legend: {display: false}, tooltip: {callbacks: {title: items => fmtTs(items[0].parsed.x / 1000), label: it => fmtPct(it.parsed.y) + ' used'}}}},
     plugins: [resetLines(h.resets.map(r => r * 1000), c.mute)],
   });
 }
@@ -308,24 +346,24 @@ async function renderLimitChart() {
 function agyText(r) {
   if (!r) return '';
   switch (r.status) {
-    case 'ran': return 'Đã làm mới agy lúc ' + new Date().toLocaleTimeString('vi-VN') + '.';
-    case 'throttled': return 'agy vừa chạy gần đây (tối đa 1 lần / 5 phút) — thử lại lúc ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
-    case 'not_installed': return 'Không tìm thấy lệnh agy trong PATH.';
-    default: return 'Lỗi làm mới agy: ' + (r.message || r.status);
+    case 'ran': return 'Refreshed agy at ' + fmtClock() + '.';
+    case 'throttled': return 'agy ran recently (at most once every 5 minutes). Try again at ' + fmtTs(r.next_allowed) + ' (' + until(r.next_allowed) + ').';
+    case 'not_installed': return 'The agy command was not found on PATH.';
+    default: return 'agy refresh failed: ' + (r.message || r.status);
   }
 }
 async function refreshAgy() {
   const b = $('agyRefresh');
   b.disabled = true;
-  $('agyMsg').textContent = 'đang chạy agy /usage… (tối đa 30 giây)';
+  $('agyMsg').textContent = 'Running agy /usage… (up to 30 seconds)';
   try {
-    const r = await fetch('/api/limits?refresh=agy', {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
+    const r = await fetch('/api/limits?refresh=agy&' + vendorQuery(), {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
     const d = await r.json();
     $('agyMsg').textContent = agyText(d.refresh);
     if (currentTab() === 'limits') await renderLimits(d);
   } catch (e) {
-    $('agyMsg').textContent = 'Lỗi làm mới agy: ' + e.message;
+    $('agyMsg').textContent = 'agy refresh failed: ' + e.message;
   } finally {
     b.disabled = false;
   }
@@ -333,7 +371,7 @@ async function refreshAgy() {
 function selectLimit(k) {
   setState({lim: k});
   document.querySelectorAll('#limCards .lcard').forEach(el => el.classList.toggle('sel', el.dataset.k === k));
-  renderLimitChart().catch(e => { $('status').textContent = 'lỗi tải dữ liệu: ' + e.message; });
+  renderLimitChart().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
 }
 function onCardActivate(el, handler) {
   const go = ev => { const card = ev.target.closest('.lcard[data-k]'); if (card) handler(card.dataset.k); };
@@ -345,9 +383,9 @@ async function renderCost() {
   const d = await getJson('/api/cost?' + apiQuery());
   const t = d.totals, e = d.efficiency;
   $('costKpis').innerHTML = [
-    kpi('Tổng chi phí', totalText(t), totalSub(t)),
-    kpi('Tỉ lệ cache', pct(e.cache_hit_ratio), 'cache read / (input + cache read)'),
-    kpi('Phần subagent', pct(e.subagent_cost_share), 'chi phí subagent / tổng'),
+    kpi('Total cost', totalText(t), totalSub(t)),
+    kpi('Cache hit ratio', pct(e.cache_hit_ratio), 'cache read / (input + cache read)'),
+    kpi('Subagent share', pct(e.subagent_cost_share), 'subagent cost / total'),
   ].join('');
   setWarn(t.unpriced_models);
   drawDaily('cCostDaily', d.daily);
@@ -369,7 +407,7 @@ async function renderCost() {
   const top = d.by_project.slice(0, 10);
   draw('cProject', {
     type: 'bar',
-    data: {labels: top.map(p => projName(p.project)), datasets: [{label: 'Chi phí', data: top.map(p => p.priced_cost),
+    data: {labels: top.map(p => projName(p.project)), datasets: [{label: 'Cost', data: top.map(p => p.priced_cost),
       backgroundColor: css('--s1'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}]},
     options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       scales: {x: {beginAtZero: true, ticks: {callback: tickMoney}, grid: {color: c.grid}}, y: {grid: {display: false}, ticks: {color: c.ink}}},
@@ -379,46 +417,60 @@ async function renderCost() {
       }}}},
   });
 
-  $('tModels').innerHTML = '<thead><tr>' + ['Model', 'Hãng', 'Chi phí', 'Tin nhắn', 'Input', 'Output', 'Cache read', 'Cache write']
+  $('tModels').innerHTML = '<thead><tr>' + ['Model', 'Vendor', 'Cost', 'Messages', 'Input', 'Output', 'Cache read', 'Cache write']
     .map((h, i) => `<th${i === 1 ? ' class="l"' : ''}>${esc(h)}</th>`).join('') + '</tr></thead><tbody>' +
     (d.by_model.length ? d.by_model.map(m => `<tr><td>${esc(m.model)}</td><td class="l">${esc(m.vendor)}</td><td>${esc(m.cost == null ? 'n/a' : fmtMoney(m.cost))}</td>` +
       [m.messages, m.input, m.output, m.cache_read, m.cache_write].map(v => `<td>${esc(num(v))}</td>`).join('') + '</tr>').join('')
-      : '<tr><td colspan="8" class="empty">Không có dữ liệu.</td></tr>') + '</tbody>';
+      : '<tr><td colspan="8" class="empty">No data.</td></tr>') + '</tbody>';
 }
 
 const SESS_COLS = [
   {key: 'project', label: 'Project', l: true, val: s => projName(s.project), cell: s => `<span title="${esc(s.project)}">${esc(projName(s.project))}</span>`},
-  {key: 'vendor', label: 'Hãng', l: true, val: s => s.vendor},
+  {key: 'vendor', label: 'Vendor', l: true, val: s => s.vendor},
   {key: 'model', label: 'Model', l: true, val: s => s.models[0] || '', cell: s => esc(s.models.join(', '))},
-  {key: 'messages', label: 'Tin nhắn', val: s => s.messages, cell: s => esc(num(s.messages))},
+  {key: 'messages', label: 'Messages', val: s => s.messages, cell: s => esc(num(s.messages))},
   {key: 'subagent', label: 'Subagent', val: s => s.subagent_messages, cell: s => esc(num(s.subagent_messages))},
-  {key: 'cost', label: 'Chi phí', val: s => s.priced_cost, cell: s => esc(costText(s.cost, s.priced_cost))},
-  {key: 'first', label: 'Đầu', val: s => s.first_ts, cell: s => esc(fmtTs(s.first_ts))},
-  {key: 'last', label: 'Cuối', val: s => s.last_ts, cell: s => esc(fmtTs(s.last_ts))},
+  {key: 'cost', label: 'Cost', val: s => s.priced_cost, cell: s => esc(costText(s.cost, s.priced_cost))},
+  {key: 'first', label: 'Started', val: s => s.first_ts, cell: s => esc(fmtTs(s.first_ts))},
+  {key: 'last', label: 'Last active', val: s => s.last_ts, cell: s => esc(fmtTs(s.last_ts))},
 ];
 const sessKey = s => s.vendor + '/' + s.session_id;
 
+// The table shows one page; sorting covers every session, not just the visible page.
+const SESS_PAGE_SIZE = 50;
+const SESS_API_LIMIT = 5000; // server-side cap of /api/sessions
+let sessPage = 0, sessQuery = '';
 function renderSessTable() {
   const col = SESS_COLS.find(c => c.key === sort.key) || SESS_COLS[5];
-  const rows = [...sessions].sort((a, b) => {
+  const all = [...sessions].sort((a, b) => {
     const x = col.val(a), y = col.val(b);
     return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y))) * sort.dir;
   });
+  const pages = Math.max(1, Math.ceil(all.length / SESS_PAGE_SIZE));
+  sessPage = Math.min(Math.max(0, sessPage), pages - 1);
+  const from = sessPage * SESS_PAGE_SIZE;
+  const rows = all.slice(from, from + SESS_PAGE_SIZE);
   const sel = urlState().session;
-  $('sessCount').textContent = rows.length + ' session';
+  $('sessCount').textContent = (all.length >= SESS_API_LIMIT ? 'first ' : '') + plural(all.length, 'session');
+  const pager = $('sessPager');
+  pager.hidden = pages < 2;
+  pager.innerHTML = pages < 2 ? '' :
+    `<button type="button" data-p="prev"${sessPage === 0 ? ' disabled' : ''}>‹ Prev</button>` +
+    `<span class="pos">${esc(num(from + 1))}–${esc(num(from + rows.length))} of ${esc(num(all.length))} · page ${esc(sessPage + 1)} / ${esc(pages)}</span>` +
+    `<button type="button" data-p="next"${sessPage >= pages - 1 ? ' disabled' : ''}>Next ›</button>`;
   $('tSess').innerHTML = '<thead><tr>' + SESS_COLS.map(c =>
     `<th data-k="${esc(c.key)}" class="${c.l ? 'l ' : ''}${c.key === sort.key ? 'sorted' : ''}">${esc(c.label)}${c.key === sort.key ? (sort.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('') +
     '</tr></thead><tbody>' + (rows.length ? rows.map(s =>
       `<tr data-s="${esc(sessKey(s))}"${sessKey(s) === sel ? ' class="sel"' : ''} title="${esc(s.title || s.session_id)}">` +
       SESS_COLS.map(c => `<td${c.l ? ' class="l"' : ''}>${c.cell ? c.cell(s) : esc(c.val(s))}</td>`).join('') + '</tr>').join('')
-      : '<tr><td colspan="8" class="empty">Không có session.</td></tr>') + '</tbody>';
+      : '<tr><td colspan="8" class="empty">No sessions.</td></tr>') + '</tbody>';
 }
 
 let tlToken = 0;
 async function renderTimeline() {
   const my = ++tlToken;
   const sel = urlState().session;
-  if (!sel) { if (charts.cTimeline) { charts.cTimeline.destroy(); delete charts.cTimeline; } return; }
+  if (!sel) { undraw('cTimeline'); return; }
   const i = sel.indexOf('/');
   const vendor = sel.slice(0, i), id = sel.slice(i + 1);
   const s = sessions.find(x => sessKey(x) === sel);
@@ -426,11 +478,11 @@ async function renderTimeline() {
   const t = await getJson('/api/session/' + encodeURIComponent(vendor) + '/' + encodeURIComponent(id) + '/timeline');
   if (my !== tlToken) return; // a later click (or refresh) owns the chart now
   $('tlNote').hidden = !t.unpriced_models.length;
-  $('tlNote').textContent = t.unpriced_models.length ? 'Đường là cận dưới — model chưa có giá: ' + t.unpriced_models.join(', ') : '';
+  $('tlNote').textContent = t.unpriced_models.length ? 'This line is a lower bound. Models without a price: ' + t.unpriced_models.join(', ') : '';
   const c = chartBase();
   draw('cTimeline', {
     type: 'line',
-    data: {datasets: [{label: 'Chi phí tích luỹ', data: t.points.map(([ts, v]) => ({x: ts * 1000, y: v})),
+    data: {datasets: [{label: 'Cumulative cost', data: t.points.map(([ts, v]) => ({x: ts * 1000, y: v})),
       borderColor: vendorColor(vendor), backgroundColor: vendorColor(vendor), borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, stepped: false, tension: 0}]},
     options: {responsive: true, maintainAspectRatio: false, interaction: {mode: 'nearest', axis: 'x', intersect: false},
       scales: {
@@ -442,7 +494,9 @@ async function renderTimeline() {
 }
 
 async function renderSessions() {
-  sessions = await getJson('/api/sessions?' + apiQuery({limit: 200}));
+  const q = apiQuery();
+  if (q !== sessQuery) { sessQuery = q; sessPage = 0; } // new filters start on page 1; a timed refresh keeps the page
+  sessions = await getJson('/api/sessions?' + apiQuery({limit: SESS_API_LIMIT}));
   renderSessTable();
   await renderTimeline();
 }
@@ -458,7 +512,6 @@ async function renderSkills() {
   const sig = JSON.stringify([d, c.mute, c.grid, c.ink, css('--s1'), css('--s2'), css('--s3'), css('--other')]);
   if (sig === skSig && charts.cSkCost) return;
   skSig = sig;
-  const noAnim = charts.cSkCost ? {animation: false} : {}; // data refresh on an already drawn tab: no re-animation
   // writes `fmt(value)` just past the end of each bar (single-series charts)
   const valueLabels = fmt => ({id: 'valueLabels', afterDatasetsDraw(ch) {
     const {ctx} = ch;
@@ -475,44 +528,44 @@ async function renderSkills() {
   const hbar = (id, wrap, labels, datasets, extra) => {
     hHeight(wrap, labels.length);
     draw(id, {type: 'bar', data: {labels, datasets},
-      options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false, ...noAnim,
+      options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false,
         scales: {x: {beginAtZero: true, grid: {color: c.grid}, ...(extra.x || {})}, y: {grid: {display: false}, ticks: {color: c.ink}, ...(extra.y || {})}},
         plugins: {legend: extra.legend || {display: false}, tooltip: {callbacks: extra.tooltip}}},
       plugins: extra.labels ? [valueLabels(extra.labels)] : []});
   };
-  // no rows: hide the chart box and show the "Không có dữ liệu" line that precedes it
+  // no rows: hide the chart box and show the "No data" line that precedes it
   const empty = (wrap, on) => { $(wrap).hidden = !on; $(wrap).previousElementSibling.hidden = !!on; };
 
   const top = d.by_cost.slice(0, 15);
   empty('wSkCost', top.length);
   if (top.length) hbar('cSkCost', 'wSkCost', top.map(s => s.skill),
-    [{label: 'Chi phí', data: top.map(s => s.priced_cost), backgroundColor: vendorColor('claude'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
+    [{label: 'Cost', data: top.map(s => s.priced_cost), backgroundColor: vendorColor('claude'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
     {x: {ticks: {callback: tickMoney}, grace: '15%'}, labels: (v, i) => costText(top[i].cost, top[i].priced_cost), tooltip: {
-      label: it => { const s = top[it.dataIndex]; return costText(s.cost, s.priced_cost) + ' · ' + num(s.messages) + ' tin nhắn'; },
+      label: it => { const s = top[it.dataIndex]; return costText(s.cost, s.priced_cost) + ' · ' + plural(s.messages, 'message'); },
       afterLabel: it => top[it.dataIndex].plugin ? 'plugin: ' + top[it.dataIndex].plugin : ''}});
-  else if (charts.cSkCost) { charts.cSkCost.destroy(); delete charts.cSkCost; }
+  else undraw('cSkCost');
 
   const pl = d.by_plugin.filter(p => p.priced_cost > 0);
   // plugins whose rows are all unpriced have nothing to draw: list them as n/a instead of dropping them
   const na = d.by_plugin.filter(p => p.priced_cost <= 0 && p.cost == null).map(p => p.plugin);
   $('skPluginNa').hidden = !na.length;
-  $('skPluginNa').textContent = na.length ? 'n/a (model chưa có giá): ' + na.join(', ') : '';
+  $('skPluginNa').textContent = na.length ? 'n/a (model has no price): ' + na.join(', ') : '';
   empty('wSkPlugin', pl.length);
   if (pl.length) {
-    // plugins past the 7th by cost fold into "Khác" (palette has 8 slots)
+    // plugins past the 7th by cost fold into "Other" (palette has 8 slots)
     const shown = pl.slice(0, SLOTS - 1), rest = pl.slice(SLOTS - 1);
     const rows = shown.map((p, i) => ({name: p.plugin, cost: p.cost, priced: p.priced_cost, color: css('--s' + (i + 1))}));
     if (rest.length) rows.push({name: OTHER, cost: rest.some(p => p.cost == null) ? null : rest.reduce((a, p) => a + p.priced_cost, 0),
       priced: rest.reduce((a, p) => a + p.priced_cost, 0), color: css('--other')});
     draw('cSkPlugin', {type: 'doughnut',
       data: {labels: rows.map(r => r.name), datasets: [{data: rows.map(r => r.priced), backgroundColor: rows.map(r => r.color), borderColor: c.surface, borderWidth: 2}]},
-      options: {responsive: true, maintainAspectRatio: false, cutout: '62%', ...noAnim,
+      options: {responsive: true, maintainAspectRatio: false, cutout: '62%',
         plugins: {legend: {...legendCfg(c), labels: {...legendCfg(c).labels,
           generateLabels: ch => Chart.overrides.doughnut.plugins.legend.labels.generateLabels(ch).map((l, i) => ({...l, fontColor: c.ink,
             text: rows[i].name + ' ' + costText(rows[i].cost, rows[i].priced)}))}},
           tooltip: {callbacks: {label: it => rows[it.dataIndex].name + ': ' + costText(rows[it.dataIndex].cost, rows[it.dataIndex].priced)}}}},
     });
-  } else if (charts.cSkPlugin) { charts.cSkPlugin.destroy(); delete charts.cSkPlugin; }
+  } else undraw('cSkPlugin');
 
   // counts per skill, one dataset per vendor (colour follows the vendor)
   const tot = {};
@@ -526,40 +579,40 @@ async function renderSkills() {
       backgroundColor: vendorColor(v), borderRadius: 2, maxBarThickness: 18})),
       {x: {stacked: true, ticks: {precision: 0}}, y: {stacked: true}, legend: legendCfg(c), tooltip: {
         label: it => { const v = vendors[it.datasetIndex], rs = cell(v, names[it.dataIndex]), n = rs.reduce((a, r) => a + r.count, 0), s = rs.reduce((a, r) => a + r.sessions, 0);
-          return n ? vendorName(v) + ': ' + num(n) + (v === 'codex' ? ' lần đọc' : ' lần gọi') + ' · ' + num(s) + ' session' : ''; }}});
-  } else if (charts.cSkCount) { charts.cSkCount.destroy(); delete charts.cSkCount; }
+          return n ? vendorName(v) + ': ' + plural(n, v === 'codex' ? 'read' : 'call') + ' · ' + plural(s, 'session') : ''; }}});
+  } else undraw('cSkCount');
 
   const tools = d.tools; // already top 20 by (vendor, tool); label with vendor when the same tool exists in several
   const dup = new Set(tools.map(t => t.tool).filter((t, i, a) => a.indexOf(t) !== i));
   const tl = t => dup.has(t.tool) ? t.tool + ' (' + vendorName(t.vendor) + ')' : t.tool;
   empty('wSkTools', tools.length);
   if (tools.length) hbar('cSkTools', 'wSkTools', tools.map(tl),
-    [{label: 'Số lần gọi', data: tools.map(t => t.count), backgroundColor: tools.map(t => vendorColor(t.vendor)), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
-    {x: {ticks: {precision: 0}, grace: '12%'}, labels: v => num(v), tooltip: {label: it => vendorName(tools[it.dataIndex].vendor) + ': ' + num(it.parsed.x) + ' lần gọi'}});
-  else if (charts.cSkTools) { charts.cSkTools.destroy(); delete charts.cSkTools; }
+    [{label: 'Calls', data: tools.map(t => t.count), backgroundColor: tools.map(t => vendorColor(t.vendor)), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
+    {x: {ticks: {precision: 0}, grace: '12%'}, labels: v => num(v), tooltip: {label: it => vendorName(tools[it.dataIndex].vendor) + ': ' + plural(it.parsed.x, 'call')}});
+  else undraw('cSkTools');
 }
 
 // ---------- active sessions + sources ----------
-const agoShort = ts => { const d = Math.max(0, Math.round(nowSec() - ts)); return d < 60 ? d + ' giây trước' : dur(d) + ' trước'; };
+const agoShort = ts => { const d = Math.max(0, Math.round(nowSec() - ts)); return d < 60 ? d + 's ago' : dur(d) + ' ago'; };
 const th = (h, l) => `<th${l ? ' class="l"' : ''}>${esc(h)}</th>`;
 const td = (v, l) => `<td${l ? ' class="l"' : ''}>${esc(v)}</td>`;
 async function renderActive() {
-  const d = await getJson('/api/active');
+  const d = await getJson('/api/active?' + apiQuery());
   const ss = d.sessions;
-  $('actCount').textContent = ss.length + ' phiên · tự làm mới 10 giây';
-  $('tActive').innerHTML = '<thead><tr>' + [['Hãng', 1], ['Project', 1], ['Model', 1], ['Cập nhật', 0], ['Chi phí đến giờ', 0], ['Chi phí 1 giờ qua', 0]]
+  $('actCount').textContent = plural(ss.length, 'session') + ' · refreshes every 10 s';
+  $('tActive').innerHTML = '<thead><tr>' + [['Vendor', 1], ['Project', 1], ['Model', 1], ['Updated', 0], ['Cost so far', 0], ['Cost, last hour', 0]]
     .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +
     (ss.length ? ss.map(s => `<tr title="${esc(s.title || s.session_id)}">` + td(vendorName(s.vendor), 1) +
       `<td class="l"><span title="${esc(s.project)}">${esc(projName(s.project))}</span></td>` + td(s.model || '—', 1) +
       td(agoShort(s.last_write)) + td(costText(s.cost_so_far, s.priced_so_far)) + td(costText(s.cost_last_hour, s.priced_last_hour)) + '</tr>').join('')
-      : `<tr><td colspan="6" class="empty">Không có phiên nào hoạt động trong ${esc(d.active_minutes)} phút gần đây</td></tr>`) + '</tbody>';
+      : `<tr><td colspan="6" class="empty">No sessions active in the last ${esc(d.active_minutes)} minutes</td></tr>`) + '</tbody>';
   const when = ts => ts ? fmtTs(ts) + ' · ' + agoShort(ts) : '—';
-  $('tSources').innerHTML = '<thead><tr>' + [['Hãng', 1], ['Tìm thấy', 1], ['Tổng bản ghi', 0], ['Bản ghi mới (lần chạy cuối)', 0], ['Đo hạn mức gần nhất', 0], ['Lần chạy cuối', 0], ['Lỗi / chi tiết', 1]]
+  $('tSources').innerHTML = '<thead><tr>' + [['Vendor', 1], ['Found', 1], ['Total records', 0], ['New records (last run)', 0], ['Latest limit reading', 0], ['Last run', 0], ['Error / details', 1]]
     .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +
-    (d.sources.length ? d.sources.map(r => '<tr>' + td(vendorName(r.vendor), 1) + td(r.found ? 'có' : 'không', 1) + td(num(r.total_records)) +
+    (d.sources.length ? d.sources.map(r => '<tr>' + td(vendorName(r.vendor), 1) + td(r.found ? 'yes' : 'no', 1) + td(num(r.total_records)) +
       td(num(r.records)) + td(when(r.last_limit_at)) + td(when(r.last_run)) +
       `<td class="l" style="white-space:normal">${r.error ? `<span style="color:var(--bad)">${esc(r.error)}</span>` : esc(r.detail || '—')}</td></tr>`).join('')
-      : '<tr><td colspan="7" class="empty">Chưa có lần chạy nào.</td></tr>') + '</tbody>';
+      : '<tr><td colspan="7" class="empty">No runs yet.</td></tr>') + '</tbody>';
 }
 
 // ---------- filters ----------
@@ -574,10 +627,11 @@ async function loadMeta() {
   const m = await getJson('/api/meta');
   const st = urlState();
   fillSelect($('vendor'), m.vendors, st.vendor);
-  fillSelect($('model'), m.models, st.model);
+  modelVendors = m.model_vendors || {};
+  fillSelect($('model'), modelsFor(m.models, st.vendor), st.model);
   buildProjLabels(m.projects.concat(st.project ? [st.project] : []));
   fillSelect($('project'), m.projects, st.project, projName);
-  $('project').title = st.project || '';
+  if (!$('project').disabled) $('project').title = st.project || '';
 }
 
 // ---------- router + refresh ----------
@@ -588,6 +642,12 @@ function showTab() {
   document.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== tab);
   document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (!RENDER[tab]) $('warn').hidden = true;
+  const used = TAB_FILTERS[tab] || FILTERS;
+  for (const k of FILTERS) {
+    const off = !used.includes(k);
+    $(k).disabled = off;
+    $(k).title = off ? `The ${FILTER_NAME[k]} filter does not apply to this tab` : (k === 'project' ? urlState().project : '');
+  }
   return tab;
 }
 // The tab switch is immediate; data loads are serialised. A request made while
@@ -597,31 +657,70 @@ async function refresh() {
   if (busy) { dirty = true; return; }
   busy = true;
   const tab = currentTab();
-  $('status').textContent = 'đang tải…';
+  $('status').textContent = 'Loading…';
   try {
     await loadMeta();
     if (RENDER[tab]) await RENDER[tab]();
-    $('status').textContent = 'cập nhật lúc ' + new Date().toLocaleTimeString('vi-VN');
+    $('status').textContent = 'Updated at ' + fmtClock();
   } catch (e) {
-    $('status').textContent = 'lỗi tải dữ liệu: ' + e.message;
+    $('status').textContent = 'Failed to load data: ' + e.message;
   } finally {
     busy = false;
     if (dirty) { dirty = false; refresh(); }
   }
 }
 
+// ---------- theme: Auto (follows the OS) -> Light -> Dark ----------
+const THEME_KEY = 'tokenscope-theme';
+const THEMES = ['auto', 'light', 'dark'];
+// inline SVG icons: unicode symbols like ◐ are missing from many system fonts
+const THEME_ICON = {
+  auto: '<circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor"/>',
+  light: '<circle cx="8" cy="8" r="3" fill="currentColor"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.4 1.4M11.55 11.55l1.4 1.4M3.05 12.95l1.4-1.4M11.55 4.45l1.4-1.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  dark: '<path d="M13.5 10.1A6 6 0 0 1 5.9 2.5a6 6 0 1 0 7.6 7.6z" fill="currentColor"/>',
+};
+const THEME_NAME = {auto: 'Auto', light: 'Light', dark: 'Dark'};
+function storedTheme() {
+  try { const t = localStorage.getItem(THEME_KEY); return THEMES.includes(t) ? t : 'auto'; } catch (e) { return 'auto'; }
+}
+let theme = 'auto';
+function applyTheme(t) {
+  theme = t;
+  if (t === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  const b = $('theme');
+  b.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${THEME_ICON[t]}</svg><span>${THEME_NAME[t]}</span>`;
+  b.title = 'Theme: ' + (t === 'auto' ? 'Auto (follows your system)' : THEME_NAME[t]) + '. Click to switch.';
+  b.setAttribute('aria-label', b.title);
+}
+function cycleTheme() {
+  const t = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* private mode: the choice lasts for this page only */ }
+  applyTheme(t);
+  refresh(); // charts read the colour tokens when drawn
+}
+
 function init() {
+  applyTheme(storedTheme());
+  $('theme').addEventListener('click', cycleTheme);
   const st = urlState();
   if (![...$('days').options].some(o => o.value === st.days)) st.days = DEFAULT_DAYS;
   $('days').value = st.days;
   writeUrl(st);
-  for (const k of FILTERS) $(k).addEventListener('change', () => { setState({[k]: $(k).value}); refresh(); });
+  for (const k of FILTERS) $(k).addEventListener('change', () => {
+    const patch = {[k]: $(k).value};
+    // a model the new vendor never used would only ever give empty results
+    if (k === 'vendor' && !modelsFor([urlState().model], patch.vendor).length) patch.model = '';
+    setState(patch);
+    refresh();
+  });
   window.addEventListener('hashchange', refresh);
   $('tSess').addEventListener('click', ev => {
     const th = ev.target.closest('th');
     if (th) {
       const k = th.dataset.k;
       sort = sort.key === k ? {key: k, dir: -sort.dir} : {key: k, dir: ['project', 'vendor', 'model'].includes(k) ? 1 : -1};
+      sessPage = 0;
       renderSessTable();
       return;
     }
@@ -629,7 +728,13 @@ function init() {
     if (!tr) return;
     setState({session: tr.dataset.s});
     renderSessTable();
-    renderTimeline().catch(e => { $('status').textContent = 'lỗi tải dữ liệu: ' + e.message; });
+    renderTimeline().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
+  });
+  $('sessPager').addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-p]');
+    if (!b || b.disabled) return;
+    sessPage += b.dataset.p === 'next' ? 1 : -1;
+    renderSessTable();
   });
   onCardActivate($('limCards'), selectLimit);
   // overview mini cards open the limits tab with that card's chart
@@ -638,7 +743,7 @@ function init() {
     const b = ev.target.closest('button[data-h]');
     if (!b) return;
     setState({lr: b.dataset.h === '168' ? '168' : ''});
-    renderLimitChart().catch(e => { $('status').textContent = 'lỗi tải dữ liệu: ' + e.message; });
+    renderLimitChart().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
   });
   $('agyRefresh').addEventListener('click', refreshAgy);
   // collapsible cards, remembered per browser
@@ -653,10 +758,13 @@ function init() {
     });
   });
   // dark/light switch: redraw charts with the other theme's colours
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refresh);
+  // an OS light/dark switch only matters in Auto mode
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (theme === 'auto') refresh(); });
   refresh();
-  // global 30 s refresh; the Đang chạy tab has its own 10 s one (only while it is open and the page visible)
-  setInterval(() => { if (currentTab() !== 'active') refresh(); }, 30000);
-  setInterval(() => { if (currentTab() === 'active' && !document.hidden) refresh(); }, 10000);
+  // global 30 s refresh; the Active tab has its own 10 s one (only while it is open and the page visible)
+  // timers only while the page is visible; coming back to the tab refreshes at once
+  setInterval(() => { if (!document.hidden && currentTab() !== 'active') refresh(); }, 30000);
+  setInterval(() => { if (!document.hidden && currentTab() === 'active') refresh(); }, 10000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 }
 init();

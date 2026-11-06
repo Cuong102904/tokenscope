@@ -114,7 +114,7 @@ fn status_prints_totals() {
     let (ok, out) = run(h.path(), &["status"]);
     assert!(ok, "{out}");
     // the fixture has an unpriced model (claude-sonnet-4-5): totals are lower bounds
-    assert!(out.contains("tất cả ≥ $"), "{out}");
+    assert!(out.contains("all time ≥ $"), "{out}");
     assert!(out.contains("n/a (no price): claude-sonnet-4-5"), "{out}");
     let today = std::fs::read_to_string(h.path().join(".tokenscope/today.txt")).unwrap();
     let (date, amt) = today.split_once(' ').unwrap();
@@ -300,14 +300,14 @@ fn partly_and_fully_unpriced_today_never_shows_zero() {
     ]);
     let (ok, out) = run(h.path(), &["status"]);
     assert!(ok, "{out}");
-    assert!(out.contains("hôm nay ≥ $1.00"), "{out}");
-    assert!(show(h.path()).contains("≥ $1.00 hôm nay"));
+    assert!(out.contains("today ≥ $1.00"), "{out}");
+    assert!(show(h.path()).contains("≥ $1.00 today"));
 
     let h = seeded_home(vec![usage_rec("b", "mystery-model", 5)]);
     let (ok, out) = run(h.path(), &["status"]);
     assert!(ok, "{out}");
-    assert!(out.contains("hôm nay n/a"), "{out}");
-    assert!(show(h.path()).contains("n/a hôm nay"));
+    assert!(out.contains("today n/a"), "{out}");
+    assert!(show(h.path()).contains("n/a today"));
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn status_lists_unavailable_vendor() {
         .find(|l| l.starts_with("opencode: unavailable ("))
         .unwrap_or_else(|| panic!("no unavailable line in {out}"));
     assert!(line.ends_with(')'), "{line}");
-    assert!(out.contains("hôm nay $0.00"), "{out}");
+    assert!(out.contains("today $0.00"), "{out}");
 }
 
 #[test]

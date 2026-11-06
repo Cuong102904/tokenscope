@@ -25,14 +25,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const DISCLAIMER: &str = "Ước tính theo giá API, không phải hoá đơn.";
+const DISCLAIMER: &str = "Estimates at API list prices, not your bill.";
 const REDRAW_EVERY: Duration = Duration::from_secs(5);
 const MAX_GAUGES: usize = 8;
 
 /// Everything `render` needs; built by [`build_state`] or by hand in tests.
 #[derive(Debug, Clone, Default)]
 pub struct TuiState {
-    /// Epoch seconds the numbers are relative to ("3p trước").
+    /// Epoch seconds the numbers are relative to ("3m ago").
     pub now: i64,
     pub today: Totals,
     pub d7: Totals,
@@ -93,10 +93,10 @@ fn local_hm(ts: i64) -> String {
 fn ago(now: i64, ts: i64) -> String {
     let s = (now - ts).max(0);
     match s {
-        0..60 => "vừa xong".into(),
-        60..3600 => format!("{}p trước", s / 60),
-        3600..86400 => format!("{}g trước", s / 3600),
-        _ => format!("{}n trước", s / 86400),
+        0..60 => "just now".into(),
+        60..3600 => format!("{}m ago", s / 60),
+        3600..86400 => format!("{}h ago", s / 3600),
+        _ => format!("{}d ago", s / 86400),
     }
 }
 
@@ -119,8 +119,8 @@ fn limit_label(c: &LimitCard, now: i64) -> String {
         return format!("{} — {}", c.account_label, c.eta_note);
     }
     let head = format!("{} {}", c.account_label, c.scope);
-    let measured = format!("đo {}", ago(now, c.measured_at));
-    let stale = if c.stale { " [CŨ]" } else { "" };
+    let measured = format!("measured {}", ago(now, c.measured_at));
+    let stale = if c.stale { " [STALE]" } else { "" };
     if c.expired {
         return format!("{head} {EXPIRED_NOTE} · {measured}{stale}");
     }
@@ -144,7 +144,7 @@ pub fn render(f: &mut Frame, st: &TuiState) {
     .areas(area);
 
     let totals = format!(
-        "hôm nay {} · 7 ngày {} · 30 ngày {}",
+        "today {} · 7 days {} · 30 days {}",
         st.today.display(),
         st.d7.display(),
         st.d30.display()
@@ -162,9 +162,9 @@ pub fn render(f: &mut Frame, st: &TuiState) {
     render_limits(f, st, mid);
     render_active(f, st, bottom);
     let foot_text = if st.status.is_empty() {
-        "q thoát · r làm mới".to_string()
+        "q quit · r refresh".to_string()
     } else {
-        format!("{} · q thoát · r làm mới", st.status)
+        format!("{} · q quit · r refresh", st.status)
     };
     f.render_widget(
         Paragraph::new(foot_text).style(Style::new().fg(Color::DarkGray)),
@@ -173,14 +173,14 @@ pub fn render(f: &mut Frame, st: &TuiState) {
 }
 
 fn render_limits(f: &mut Frame, st: &TuiState, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title("Hạn mức");
+    let block = Block::default().borders(Borders::ALL).title("Rate limits");
     let inner = block.inner(area);
     f.render_widget(block, area);
     if inner.height == 0 {
         return;
     }
     if st.limits.is_empty() {
-        f.render_widget(Paragraph::new("Chưa có dữ liệu hạn mức."), inner);
+        f.render_widget(Paragraph::new("No rate-limit data yet."), inner);
         return;
     }
     let rows = inner.height as usize;
@@ -230,7 +230,7 @@ fn render_limits(f: &mut Frame, st: &TuiState, area: Rect) {
             height: 1,
         };
         f.render_widget(
-            Paragraph::new(format!("+{left_out} thẻ cũ / còn lại bị ẩn"))
+            Paragraph::new(format!("+{left_out} old or overflow cards hidden"))
                 .style(Style::new().fg(Color::DarkGray)),
             r,
         );
@@ -240,12 +240,9 @@ fn render_limits(f: &mut Frame, st: &TuiState, area: Rect) {
 fn render_active(f: &mut Frame, st: &TuiState, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!("Phiên đang chạy ({})", st.active.len()));
+        .title(format!("Active sessions ({})", st.active.len()));
     if st.active.is_empty() {
-        f.render_widget(
-            Paragraph::new("Không có phiên nào đang chạy.").block(block),
-            area,
-        );
+        f.render_widget(Paragraph::new("No active sessions.").block(block), area);
         return;
     }
     let rows = st.active.iter().map(|s| {
@@ -264,7 +261,7 @@ fn render_active(f: &mut Frame, st: &TuiState, area: Rect) {
         Constraint::Length(10),
         Constraint::Length(10),
     ];
-    let header = Row::new(["hãng", "dự án", "model", "cập nhật", "chi phí"])
+    let header = Row::new(["vendor", "project", "model", "updated", "cost"])
         .style(Style::new().add_modifier(Modifier::BOLD));
     f.render_widget(Table::new(rows, widths).header(header).block(block), area);
 }
@@ -291,11 +288,11 @@ pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
     p.downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| p.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "không rõ".into())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn died_status(reason: &str) -> String {
-    format!("bộ thu thập đã dừng: {reason}")
+    format!("collector stopped: {reason}")
 }
 
 /// Runs `body` under a panic guard and always reports how it ended as the last message.
@@ -312,19 +309,19 @@ pub fn guarded_worker(tx: &mpsc::Sender<Msg>, body: impl FnOnce() -> String) {
 pub fn apply_rebuild(state: &mut TuiState, res: anyhow::Result<TuiState>) {
     match res {
         Ok(s) => *state = s,
-        Err(e) => state.status = format!("lỗi đọc DB: {e:#}"),
+        Err(e) => state.status = format!("DB read error: {e:#}"),
     }
 }
 
 fn agy_note(r: anyhow::Result<agy::RefreshOutcome>) -> String {
     match r {
-        Ok(agy::RefreshOutcome::Ran) => "agy: đã làm mới".into(),
+        Ok(agy::RefreshOutcome::Ran) => "agy: refreshed".into(),
         Ok(agy::RefreshOutcome::Throttled { next_allowed }) => format!(
-            "agy: vừa làm mới, lần sau được phép lúc {}",
+            "agy: refreshed recently, next run allowed at {}",
             local_hm(next_allowed)
         ),
         Ok(agy::RefreshOutcome::NotInstalled) => "agy: not found on PATH".into(),
-        Err(e) => format!("agy: lỗi {e:#}"),
+        Err(e) => format!("agy: error {e:#}"),
     }
 }
 
@@ -347,11 +344,11 @@ fn worker_body(
                     .iter()
                     .find_map(|s| s.error.as_ref().map(|e| (s.vendor, e)))
                 {
-                    Some((v, e)) => format!("lỗi {}: {e}", v.as_str()),
-                    None => format!("đã thu thập lúc {}", Local::now().format("%H:%M:%S")),
+                    Some((v, e)) => format!("{} error: {e}", v.as_str()),
+                    None => format!("collected at {}", Local::now().format("%H:%M:%S")),
                 },
-                Tick::OpenFailed(e) => format!("không mở được DB (sẽ thử lại): {e}"),
-                Tick::Panicked(m) => format!("thu thập bị lỗi nội bộ (panic): {m}"),
+                Tick::OpenFailed(e) => format!("could not open the DB (will retry): {e}"),
+                Tick::Panicked(m) => format!("collector crashed (panic): {m}"),
             };
             // the status line replaces the stderr log here (stderr would draw over the UI)
             col.take_log();
@@ -363,18 +360,18 @@ fn worker_body(
                                 Err(anyhow::anyhow!("panic: {}", panic_message(&*p)))
                             })
                     }
-                    None => Err(anyhow::anyhow!("chưa mở được DB")),
+                    None => Err(anyhow::anyhow!("the DB is not open yet")),
                 };
                 note = format!("{note} · {}", agy_note(r));
             }
             if tx.send(Msg::Done(note)).is_err() {
-                return "giao diện đã đóng".into();
+                return "UI closed".into();
             }
         }
         match rx.recv_timeout(every) {
             Ok(Cmd::Now(a)) => want = Some(a),
             Err(mpsc::RecvTimeoutError::Timeout) => want = Some(false),
-            Err(mpsc::RecvTimeoutError::Disconnected) => return "giao diện đã đóng".into(),
+            Err(mpsc::RecvTimeoutError::Disconnected) => return "UI closed".into(),
         }
     }
 }
@@ -432,7 +429,7 @@ fn event_loop(
     cmd_tx: &mpsc::Sender<Cmd>,
     msg_rx: &mpsc::Receiver<Msg>,
 ) -> anyhow::Result<()> {
-    let mut status = "đang thu thập…".to_string();
+    let mut status = "collecting…".to_string();
     let mut died: Option<String> = None;
     let mut state = TuiState {
         status: status.clone(),
@@ -466,8 +463,8 @@ fn event_loop(
                     }
                     KeyCode::Char('r') => {
                         status = match cmd_tx.send(Cmd::Now(true)) {
-                            Ok(()) if died.is_none() => "đang làm mới…".into(),
-                            _ => died_status(died.as_deref().unwrap_or("không rõ")),
+                            Ok(()) if died.is_none() => "refreshing…".into(),
+                            _ => died_status(died.as_deref().unwrap_or("unknown")),
                         };
                         next_rebuild = Instant::now();
                     }

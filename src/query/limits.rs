@@ -14,14 +14,14 @@ const ETA_LOOKBACK_SECS: i64 = 3600;
 const ETA_MIN_POINTS: usize = 3;
 const ETA_MIN_SPAN_SECS: i64 = 600;
 
-pub const EXPIRED_NOTE: &str = "đã reset, chờ số mới";
+pub const EXPIRED_NOTE: &str = "reset, waiting for a new reading";
 pub const NO_DATA_NOTE: &str =
-    "Chưa có dữ liệu hạn mức — chạy `tokenscope statusline --print-snippet`";
-pub const UNKNOWN_ACCOUNT_LABEL: &str = "log cũ không phân biệt tài khoản";
-const STALE_ETA_NOTE: &str = "số đo đã cũ, không tính ETA";
-const MIXED_REASON: &str = "số liệu lẫn tài khoản hoặc nhiễu";
+    "No rate-limit data yet. Run `tokenscope statusline --print-snippet`";
+pub const UNKNOWN_ACCOUNT_LABEL: &str = "old logs without an account ID";
+const STALE_ETA_NOTE: &str = "reading is stale, no ETA";
+const MIXED_REASON: &str = "readings mix accounts or are noisy";
 const MIXED_WARNING: &str =
-    "% đã dùng giảm trong cùng một chu kỳ — số liệu lẫn tài khoản hoặc nhiễu, không tính ETA";
+    "% used went down within one window: readings mix accounts or are noisy, no ETA";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LimitCard {
@@ -132,7 +132,7 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
                 // an old trend is not a forecast (it may even point into the past)
                 EtaResult::At(_) if c.stale => c.eta_note = STALE_ETA_NOTE.to_string(),
                 EtaResult::At(t) if t < now => {
-                    c.eta_note = "đã qua thời điểm dự kiến, chờ số mới".to_string()
+                    c.eta_note = "projected time has passed, waiting for a new reading".to_string()
                 }
                 EtaResult::At(t) => c.eta = Some(t),
                 EtaResult::Unavailable(why) => {
@@ -143,7 +143,7 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
                 }
             }
         } else {
-            c.eta_note = "không có giờ reset".to_string();
+            c.eta_note = "no reset time".to_string();
         }
         cards.push(c);
     }
@@ -220,20 +220,20 @@ pub fn eta(points: &[(i64, f64)], resets_at: i64) -> EtaResult {
     let mut pts = points.to_vec();
     pts.sort_by_key(|p| p.0);
     let Some(&(last_t, last_y)) = pts.last() else {
-        return no("chưa có số liệu");
+        return no("no readings yet");
     };
     pts.retain(|p| p.0 >= last_t - ETA_LOOKBACK_SECS);
     if pts.windows(2).any(|w| w[1].1 < w[0].1) {
         return no(MIXED_REASON);
     }
     if pts.len() < ETA_MIN_POINTS {
-        return no("chưa đủ số liệu (cần ≥ 3 lần đo trong 60 phút)");
+        return no("not enough readings (need ≥ 3 in 60 minutes)");
     }
     if last_t - pts[0].0 < ETA_MIN_SPAN_SECS {
-        return no("chưa đủ số liệu (các lần đo cần trải ≥ 10 phút)");
+        return no("not enough readings (they must span ≥ 10 minutes)");
     }
     if last_y >= 100.0 {
-        return no("đã chạm giới hạn");
+        return no("limit already reached");
     }
     // least squares on times relative to the first point (keeps f64 precise)
     let t0 = pts[0].0;
@@ -247,11 +247,11 @@ pub fn eta(points: &[(i64, f64)], resets_at: i64) -> EtaResult {
     let var: f64 = pts.iter().map(|p| ((p.0 - t0) as f64 - mt).powi(2)).sum();
     let slope = cov / var;
     if slope <= 0.0 || !slope.is_finite() {
-        return no("không tăng trong 60 phút qua");
+        return no("no increase in the last 60 minutes");
     }
     let at = (t0 as f64 + mt + (100.0 - my) / slope).round() as i64;
     if at > resets_at {
-        return no("không chạm trước khi reset");
+        return no("won't hit the limit before reset");
     }
     EtaResult::At(at.max(last_t))
 }

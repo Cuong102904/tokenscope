@@ -155,7 +155,7 @@ fn current_takes_latest_per_key_and_labels() {
     let old = card(&cards, "codex", "", "five_hour");
     assert_eq!(old.used_percent, 7.0);
     assert_eq!(old.measured_at, NOW - 10 * MIN);
-    assert_eq!(old.account_label, "log cũ không phân biệt tài khoản");
+    assert_eq!(old.account_label, "old logs without an account ID");
     assert_eq!(old.plan_type.as_deref(), Some("plus"));
     assert_eq!(
         card(&cards, "codex", "f8ce04de", "five_hour").account_label,
@@ -200,7 +200,7 @@ fn expired_window_not_shown_as_current() {
     let x = card(&cards, "claude", "a", "five_hour");
     assert!(x.expired);
     assert_eq!(x.eta, None);
-    assert_eq!(x.eta_note, "đã reset, chờ số mới");
+    assert_eq!(x.eta_note, "reset, waiting for a new reading");
     assert!(!card(&cards, "claude", "a", "weekly").expired);
     assert!(
         !cards.iter().any(|c| c.no_data),
@@ -222,20 +222,20 @@ fn eta_disabled_on_drop() {
         &[(0, 40.0), (600, 20.0), (1200, 45.0)],
         100_000,
     ));
-    assert!(r.contains("lẫn"), "{r}");
+    assert!(r.contains("mix accounts"), "{r}");
 }
 
 #[test]
 fn eta_after_reset_is_none() {
     let r = reason(limits::eta(&[(0, 10.0), (600, 20.0), (1200, 30.0)], 3000));
-    assert_eq!(r, "không chạm trước khi reset");
+    assert_eq!(r, "won't hit the limit before reset");
 }
 
 #[test]
 fn eta_needs_three_points_over_ten_minutes_in_last_hour() {
     assert!(reason(limits::eta(&[(0, 10.0), (1200, 30.0)], 100_000)).contains("3"));
     assert!(
-        reason(limits::eta(&[(0, 10.0), (300, 20.0), (500, 30.0)], 100_000)).contains("10 phút")
+        reason(limits::eta(&[(0, 10.0), (300, 20.0), (500, 30.0)], 100_000)).contains("10 minutes")
     );
     // the first point is more than 60 min before the last: only two remain
     assert!(
@@ -333,9 +333,11 @@ fn card_eta_uses_same_reset_window_and_warns_on_drop() {
     assert!(a.warning.is_none());
     let m = card(&cards, "codex", "", "weekly");
     assert_eq!(m.eta, None);
-    assert!(m.eta_note.contains("lẫn"));
+    assert!(m.eta_note.contains("mix accounts"));
     assert!(
-        m.warning.as_deref().is_some_and(|w| w.contains("lẫn")),
+        m.warning
+            .as_deref()
+            .is_some_and(|w| w.contains("mix accounts")),
         "{m:?}"
     );
 }
@@ -420,7 +422,7 @@ fn events_since_newest_first() {
     let ev = limits::events(&c, &Config::default(), NOW - 30 * DAY).unwrap();
     assert_eq!(ev.len(), 2);
     assert_eq!((ev[0].ts, ev[0].scope.as_str()), (NOW - HOUR, "secondary"));
-    assert_eq!(ev[0].account_label, "log cũ không phân biệt tài khoản");
+    assert_eq!(ev[0].account_label, "old logs without an account ID");
     assert_eq!(ev[1].resets_at, Some(NOW - 2 * DAY + HOUR));
 }
 
@@ -545,7 +547,7 @@ fn stale_card_has_no_eta() {
     let x = card(&cards, "codex", "a", "monthly");
     assert!(x.stale);
     assert_eq!(x.eta, None);
-    assert!(x.eta_note.contains("cũ"), "{}", x.eta_note);
+    assert!(x.eta_note.contains("stale"), "{}", x.eta_note);
 }
 
 #[test]

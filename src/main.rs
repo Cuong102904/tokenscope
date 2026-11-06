@@ -50,7 +50,7 @@ enum Cmd {
         /// Like --wrap, but runs `sh <path>`
         #[arg(long, conflicts_with = "wrap")]
         wrap_file: Option<std::path::PathBuf>,
-        /// Append `5h 44% · tuần 54% · $12.00 hôm nay` on its own line
+        /// Append `5h 44% · week 54% · $12.00 today` on its own line
         #[arg(long)]
         show: bool,
         /// Account name for the snapshot (default: $TOKENSCOPE_ACCOUNT, then config)
@@ -72,7 +72,7 @@ enum Cmd {
     Doctor,
 }
 
-const DISCLAIMER: &str = "Ước tính theo giá API, không phải hoá đơn.";
+const DISCLAIMER: &str = "Estimates at API list prices, not your bill.";
 const ALL_VENDORS: [Vendor; 4] = [Vendor::Claude, Vendor::Codex, Vendor::OpenCode, Vendor::Agy];
 
 fn collect_once(paths: &Paths) -> anyhow::Result<(Connection, Config, Vec<AdapterStatus>)> {
@@ -249,7 +249,7 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
                 println!(
-                    "hôm nay {} · 7 ngày {} · 30 ngày {} · tất cả {}",
+                    "today {} · 7 days {} · 30 days {} · all time {}",
                     today.display(),
                     d7.display(),
                     d30.display(),

@@ -19,9 +19,9 @@ Each vendor shows part of this in a different place, or not at all. tokenscope p
 - **Four agents, one view.** Supports Claude Code, Codex CLI, OpenCode and Antigravity. Multiple accounts per vendor are kept apart.
 - **Estimated cost.** Prices come from a built-in table of API list prices (`assets/pricing.toml`) and are computed at query time, so a price update applies to history too. When a model has no known price, totals say `≥ $X` or `n/a` instead of showing a silent `$0`.
 - **Rate limits.** Shows 5-hour and weekly usage %, reset times and a projected time-to-limit. Old readings are marked stale instead of being shown as current.
-- **Web dashboard** with six tabs: Overview, Limits, Cost, Sessions, Skills & tools, Active.
+- **Web dashboard** with six tabs: Overview, Limits, Cost, Sessions, Skills & tools, Active. It has a light/dark theme switch (Auto follows your system) that is remembered per browser.
 - **Terminal UI** for a quick look without a browser.
-- **Claude Code status line** that adds a line like `5h 44% · tuần 54% · $12.00 hôm nay` (5-hour, weekly, today's cost) under your existing status line.
+- **Claude Code status line** that adds a line like `5h 44% · week 54% · $12.00 today` under your existing status line.
 - **Privacy.** Account IDs are stored only as short hashes. Credential files are never opened. The web server binds to `127.0.0.1` only and rejects foreign `Host` headers.
 - **Single binary.** Data lives in SQLite (bundled) and the web assets are embedded. There is no runtime to install.
 
@@ -147,7 +147,6 @@ Everything lives in `~/.tokenscope/`:
 ## Caveats
 
 - Costs are **estimates at API list prices**, not your bill. Subscription plans are billed differently.
-- The dashboard, TUI and status line text is currently in Vietnamese.
 - Rate-limit projections are linear extrapolations of recent usage.
 
 ## Development

@@ -87,19 +87,19 @@ fn draw(st: &TuiState, w: u16, h: u16) -> String {
 fn renders_totals_limits_and_sessions() {
     let s = draw(&state(), 100, 30);
     for want in [
-        "hôm nay",
+        "today",
         "$1.25",
         "≥ $7.50",
         "n/a",
         "44%",
-        "[CŨ]",
-        "đã reset, chờ số mới",
+        "[STALE]",
+        "reset, waiting for a new reading",
         "my-proj",
         "claude-fable-5-1",
         "$1.50",
-        "Ước tính theo giá API, không phải hoá đơn.",
+        "Estimates at API list prices, not your bill.",
         "agy: not found",
-        "2 thẻ cũ",
+        "+2 old or overflow cards",
     ] {
         assert!(s.contains(want), "missing {want:?} in:\n{s}");
     }
@@ -109,7 +109,7 @@ fn renders_totals_limits_and_sessions() {
         .format("reset %H:%M")
         .to_string();
     assert!(s.contains(&reset), "missing {reset:?}");
-    assert!(s.contains("đo 3p trước"), "{s}");
+    assert!(s.contains("measured 3m ago"), "{s}");
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn guarded_worker_reports_panic_and_normal_exit() {
     }
     tui::guarded_worker(&tx, || "stopped".to_string());
     assert!(matches!(rx.recv().unwrap(), tui::Msg::Died(r) if r == "stopped"));
-    assert_eq!(tui::died_status("x"), "bộ thu thập đã dừng: x");
+    assert_eq!(tui::died_status("x"), "collector stopped: x");
 }
 
 #[test]
