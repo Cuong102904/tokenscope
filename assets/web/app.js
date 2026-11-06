@@ -96,9 +96,30 @@ function chartBase() {
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
   return {mute, grid, ink, surface: css('--card')};
 }
+// Charts are kept and updated in place. Destroying and re-creating them on every
+// refresh blanked the canvas, killed an open tooltip and re-ran the grow animation;
+// that animation needs animation frames, which hidden or throttled tabs don't get,
+// so the chart could stay empty or half drawn.
+const chartSig = {};
 function draw(id, cfg) {
-  if (charts[id]) charts[id].destroy();
-  charts[id] = new Chart($(id), cfg);
+  const old = charts[id];
+  const sig = JSON.stringify([cfg.type, cfg.data, cfg.options]); // functions drop out: data + colours only
+  if (old && chartSig[id] === sig) return; // nothing changed: leave it (and its tooltip) alone
+  chartSig[id] = sig;
+  if (old && old.config.type === cfg.type && !(cfg.plugins || []).length) {
+    old.data = cfg.data;
+    old.options = cfg.options;
+    old.update('none'); // synchronous redraw, no animation frames needed
+    return;
+  }
+  // inline plugins close over the old data, so those charts are rebuilt, but never animated
+  if (old) old.destroy();
+  const animate = !old && !document.hidden; // only a chart's first appearance animates
+  charts[id] = new Chart($(id), animate ? cfg : {...cfg, options: {...cfg.options, animation: false}});
+}
+function undraw(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+  delete chartSig[id];
 }
 const legendCfg = c => ({position: 'bottom', labels: {color: c.ink, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded'}});
 
@@ -159,8 +180,10 @@ function setWarn(unpriced) {
   w.textContent = unpriced.length ? 'Models without a price (shown as "n/a", not counted in totals): ' + unpriced.join(', ') : '';
 }
 
+// a request that never answers must not leave `busy` set forever (no more refreshes until F5)
+const FETCH_TIMEOUT_MS = 15000;
 async function getJson(path) {
-  const r = await fetch(path, {cache: 'no-store'});
+  const r = await fetch(path, {cache: 'no-store', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)});
   if (!r.ok) throw new Error(path + ': HTTP ' + r.status + ' ' + (await r.text()));
   return r.json();
 }
@@ -282,7 +305,7 @@ async function renderLimitChart() {
   document.querySelectorAll('#limRange button').forEach(b => b.classList.toggle('on', b.dataset.h === String(hours)));
   if (!st.lim) {
     $('limChartTitle').textContent = 'click a card above';
-    if (charts.cLimit) { charts.cLimit.destroy(); delete charts.cLimit; }
+    undraw('cLimit');
     limChartSig = '';
     return;
   }
@@ -427,7 +450,7 @@ let tlToken = 0;
 async function renderTimeline() {
   const my = ++tlToken;
   const sel = urlState().session;
-  if (!sel) { if (charts.cTimeline) { charts.cTimeline.destroy(); delete charts.cTimeline; } return; }
+  if (!sel) { undraw('cTimeline'); return; }
   const i = sel.indexOf('/');
   const vendor = sel.slice(0, i), id = sel.slice(i + 1);
   const s = sessions.find(x => sessKey(x) === sel);
@@ -499,7 +522,7 @@ async function renderSkills() {
     {x: {ticks: {callback: tickMoney}, grace: '15%'}, labels: (v, i) => costText(top[i].cost, top[i].priced_cost), tooltip: {
       label: it => { const s = top[it.dataIndex]; return costText(s.cost, s.priced_cost) + ' · ' + plural(s.messages, 'message'); },
       afterLabel: it => top[it.dataIndex].plugin ? 'plugin: ' + top[it.dataIndex].plugin : ''}});
-  else if (charts.cSkCost) { charts.cSkCost.destroy(); delete charts.cSkCost; }
+  else undraw('cSkCost');
 
   const pl = d.by_plugin.filter(p => p.priced_cost > 0);
   // plugins whose rows are all unpriced have nothing to draw: list them as n/a instead of dropping them
@@ -521,7 +544,7 @@ async function renderSkills() {
             text: rows[i].name + ' ' + costText(rows[i].cost, rows[i].priced)}))}},
           tooltip: {callbacks: {label: it => rows[it.dataIndex].name + ': ' + costText(rows[it.dataIndex].cost, rows[it.dataIndex].priced)}}}},
     });
-  } else if (charts.cSkPlugin) { charts.cSkPlugin.destroy(); delete charts.cSkPlugin; }
+  } else undraw('cSkPlugin');
 
   // counts per skill, one dataset per vendor (colour follows the vendor)
   const tot = {};
@@ -536,7 +559,7 @@ async function renderSkills() {
       {x: {stacked: true, ticks: {precision: 0}}, y: {stacked: true}, legend: legendCfg(c), tooltip: {
         label: it => { const v = vendors[it.datasetIndex], rs = cell(v, names[it.dataIndex]), n = rs.reduce((a, r) => a + r.count, 0), s = rs.reduce((a, r) => a + r.sessions, 0);
           return n ? vendorName(v) + ': ' + plural(n, v === 'codex' ? 'read' : 'call') + ' · ' + plural(s, 'session') : ''; }}});
-  } else if (charts.cSkCount) { charts.cSkCount.destroy(); delete charts.cSkCount; }
+  } else undraw('cSkCount');
 
   const tools = d.tools; // already top 20 by (vendor, tool); label with vendor when the same tool exists in several
   const dup = new Set(tools.map(t => t.tool).filter((t, i, a) => a.indexOf(t) !== i));
@@ -545,7 +568,7 @@ async function renderSkills() {
   if (tools.length) hbar('cSkTools', 'wSkTools', tools.map(tl),
     [{label: 'Calls', data: tools.map(t => t.count), backgroundColor: tools.map(t => vendorColor(t.vendor)), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18}],
     {x: {ticks: {precision: 0}, grace: '12%'}, labels: v => num(v), tooltip: {label: it => vendorName(tools[it.dataIndex].vendor) + ': ' + plural(it.parsed.x, 'call')}});
-  else if (charts.cSkTools) { charts.cSkTools.destroy(); delete charts.cSkTools; }
+  else undraw('cSkTools');
 }
 
 // ---------- active sessions + sources ----------
@@ -698,7 +721,9 @@ function init() {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (theme === 'auto') refresh(); });
   refresh();
   // global 30 s refresh; the Active tab has its own 10 s one (only while it is open and the page visible)
-  setInterval(() => { if (currentTab() !== 'active') refresh(); }, 30000);
-  setInterval(() => { if (currentTab() === 'active' && !document.hidden) refresh(); }, 10000);
+  // timers only while the page is visible; coming back to the tab refreshes at once
+  setInterval(() => { if (!document.hidden && currentTab() !== 'active') refresh(); }, 30000);
+  setInterval(() => { if (!document.hidden && currentTab() === 'active') refresh(); }, 10000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 }
 init();
