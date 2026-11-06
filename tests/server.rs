@@ -2,7 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Duration, Local};
 use http_body_util::BodyExt;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokenscope::config::Config;
 use tokenscope::server::{self, AppState};
@@ -185,7 +185,10 @@ async fn api_overview_shape() {
     assert_eq!(v["totals_today"]["messages"], 2);
     assert_eq!(v["totals_7d"]["messages"], 3);
     assert_eq!(v["totals_30d"]["messages"], 3);
-    assert_eq!(v["active_count"], 0);
+    assert_eq!(
+        (&v["active_open"], &v["active_working"]),
+        (&json!(0), &json!(0))
+    );
     // no limit data: only the Claude "no data" placeholder card
     assert_eq!(v["limits_mini"].as_array().unwrap().len(), 1);
     assert_eq!(v["limits_mini"][0]["no_data"], true);
@@ -457,7 +460,10 @@ async fn active_follows_filters_but_sources_do_not() {
     let m = json(&st, "/api/active?model=claude-fable-5-1").await;
     assert_eq!(vendors_of(&m["sessions"]), ["claude"]);
     let o = json(&st, "/api/overview?vendor=codex").await;
-    assert_eq!(o["active_count"], 1);
+    assert_eq!(
+        (&o["active_open"], &o["active_working"]),
+        (&json!(1), &json!(1))
+    );
 }
 
 #[tokio::test]

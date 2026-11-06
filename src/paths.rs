@@ -57,6 +57,10 @@ impl Paths {
     pub fn claude_projects(&self) -> PathBuf {
         self.home.join(".claude/projects")
     }
+    /// `<pid>.json` per open interactive `claude` (see `open_sessions`).
+    pub fn claude_session_registry(&self) -> PathBuf {
+        self.home.join(".claude/sessions")
+    }
     pub fn codex_sessions(&self) -> PathBuf {
         self.home.join(".codex/sessions")
     }

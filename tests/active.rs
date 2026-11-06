@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 use tokenscope::adapters::{claude::ClaudeAdapter, codex::CodexAdapter};
 use tokenscope::config::Config;
+use tokenscope::model::Vendor;
+use tokenscope::open_sessions::{OpenSession, OpenSessions};
 use tokenscope::query::active;
 use tokenscope::server::{self, AppState};
 use tokenscope::{collect, db, paths::Paths, pricing::PriceTable};
@@ -68,7 +70,7 @@ fn window_boundaries_and_costs() {
         "claude-sonnet-5-5",
         1_000_000,
     );
-    let list = active::list(&c, &prices, &cfg, NOW).unwrap();
+    let list = active::list(&c, &prices, &cfg, &none(), NOW).unwrap();
     let ids: Vec<_> = list.iter().map(|s| s.session_id.as_str()).collect();
     assert_eq!(
         ids,
@@ -113,7 +115,7 @@ fn unpriced_row_gives_none_but_keeps_lower_bound() {
         1_000_000,
     );
     usage(&c, "b", "codex", "u", NOW - 10, "no-such-model", 5);
-    let s = &active::list(&c, &prices, &Config::default(), NOW).unwrap()[0];
+    let s = &active::list(&c, &prices, &Config::default(), &none(), NOW).unwrap()[0];
     assert_eq!((s.cost_so_far, s.cost_last_hour), (None, None));
     assert!(s.priced_so_far > 0.0 && s.priced_last_hour > 0.0);
     assert_eq!(s.model.as_deref(), Some("no-such-model"));
@@ -124,7 +126,7 @@ fn active_minutes_comes_from_config() {
     let (_d, c, prices, _p) = setup();
     session(&c, "claude", "s", "/p", NOW - 600);
     assert!(
-        active::list(&c, &prices, &Config::default(), NOW)
+        active::list(&c, &prices, &Config::default(), &none(), NOW)
             .unwrap()
             .is_empty()
     );
@@ -132,7 +134,10 @@ fn active_minutes_comes_from_config() {
         active_minutes: 15,
         ..Config::default()
     };
-    assert_eq!(active::list(&c, &prices, &cfg, NOW).unwrap().len(), 1);
+    assert_eq!(
+        active::list(&c, &prices, &cfg, &none(), NOW).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -303,5 +308,132 @@ async fn api_active_and_overview_count() {
     drop(c);
     let v = api(&st, "/api/active").await;
     assert_eq!(v["sources"][0]["last_limit_at"].as_i64(), Some(now - 50));
-    assert_eq!(api(&st, "/api/overview").await["active_count"], 1);
+    assert_eq!(api(&st, "/api/overview").await["active_open"], 1);
+}
+
+fn none() -> OpenSessions {
+    OpenSessions::default()
+}
+
+fn open(sid: &str, pid: u32, busy: bool, since: i64) -> OpenSession {
+    OpenSession {
+        vendor: Vendor::Claude,
+        session_id: sid.into(),
+        cwd: format!("/home/u/{sid}-cwd"),
+        pid,
+        busy,
+        since: Some(since),
+    }
+}
+
+#[test]
+fn open_sessions_join_the_list_with_their_state() {
+    let (_d, c, prices, _p) = setup();
+    session(&c, "claude", "busy", "/home/u/a", NOW - 30);
+    session(&c, "claude", "idle-old", "/home/u/b", NOW - 3600); // open but quiet for an hour
+    session(&c, "claude", "closed", "/home/u/c", NOW - 60); // written lately, no process
+    session(&c, "codex", "cx", "/home/u/d", NOW - 10); // no process info for codex
+    let reg = OpenSessions {
+        claude: Some(vec![
+            open("busy", 11, true, NOW - 5),
+            open("idle-old", 12, false, NOW - 900),
+            open("fresh", 13, false, NOW - 20), // open, nothing logged yet
+        ]),
+    };
+    let list = active::list(&c, &prices, &Config::default(), &reg, NOW).unwrap();
+    let rows: Vec<_> = list
+        .iter()
+        .map(|s| (s.session_id.as_str(), s.state, s.pid, s.project.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            // working first (most recently written first), then idle
+            ("cx", "working", None, "/home/u/d"),
+            ("busy", "working", Some(11), "/home/u/a"),
+            ("closed", "working", None, "/home/u/c"),
+            ("fresh", "idle", Some(13), "/home/u/fresh-cwd"),
+            ("idle-old", "idle", Some(12), "/home/u/b"),
+        ]
+    );
+    let idle_old = list.iter().find(|s| s.session_id == "idle-old").unwrap();
+    assert_eq!(
+        (idle_old.state_since, idle_old.last_write),
+        (Some(NOW - 900), NOW - 3600)
+    );
+    let fresh = list.iter().find(|s| s.session_id == "fresh").unwrap();
+    assert_eq!(
+        (fresh.last_write, fresh.model.clone(), fresh.cost_so_far),
+        (NOW - 20, None, Some(0.0))
+    );
+    assert_eq!(active::counts(&list), (5, 3));
+}
+
+#[test]
+fn without_a_registry_the_log_window_decides_as_before() {
+    let (_d, c, prices, _p) = setup();
+    session(&c, "claude", "recent", "/p", NOW - 30);
+    session(&c, "claude", "old", "/p", NOW - 3600);
+    let list = active::list(&c, &prices, &Config::default(), &none(), NOW).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        (list[0].state, list[0].pid, list[0].state_since),
+        ("working", None, None)
+    );
+}
+
+#[tokio::test]
+async fn api_counts_open_and_working_from_the_claude_registry() {
+    let (_d, c, prices, paths) = setup();
+    let now = chrono::Utc::now().timestamp();
+    session(&c, "claude", "mine", "/home/u/proj", now - 7200);
+    session(&c, "claude", "recent", "/home/u/proj", now - 30);
+    drop(c);
+    // this test process stands in for an open, idle `claude`
+    let me = std::process::id();
+    let stat = std::fs::read_to_string(format!("/proc/{me}/stat")).unwrap();
+    let start = tokenscope::open_sessions::proc_start_time(&stat)
+        .unwrap()
+        .to_string();
+    let reg = paths.claude_session_registry();
+    std::fs::create_dir_all(&reg).unwrap();
+    std::fs::write(
+        reg.join(format!("{me}.json")),
+        format!(r#"{{"pid":{me},"sessionId":"mine","cwd":"/home/u/proj","procStart":"{start}","status":"idle","statusUpdatedAt":{}}}"#, (now - 60) * 1000),
+    )
+    .unwrap();
+    // a closed one: same shape, a pid that does not run
+    std::fs::write(
+        reg.join("4194000.json"),
+        r#"{"pid":4194000,"sessionId":"gone","cwd":"/x","procStart":"1","status":"busy"}"#,
+    )
+    .unwrap();
+    let st = AppState {
+        paths,
+        prices: Arc::new(prices),
+        cfg: Arc::new(Config::default()),
+        port: 8765,
+    };
+    let v = api(&st, "/api/active").await;
+    let rows: Vec<_> = v["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["session_id"].as_str().unwrap(),
+                s["state"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(rows, vec![("recent", "working"), ("mine", "idle")]);
+    assert_eq!(v["sessions"][1]["pid"].as_u64(), Some(me as u64));
+    let o = api(&st, "/api/overview").await;
+    assert_eq!(
+        (o["active_open"].as_u64(), o["active_working"].as_u64()),
+        (Some(2), Some(1))
+    );
+    // filters apply to open sessions too
+    let o = api(&st, "/api/overview?project=/elsewhere").await;
+    assert_eq!(o["active_open"].as_u64(), Some(0));
 }

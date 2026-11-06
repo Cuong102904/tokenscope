@@ -2,6 +2,7 @@ use chrono::{Local, TimeZone};
 use ratatui::{Terminal, backend::TestBackend};
 use tokenscope::config::Config;
 use tokenscope::db;
+use tokenscope::open_sessions::OpenSessions;
 use tokenscope::paths::Paths;
 use tokenscope::pricing::PriceTable;
 use tokenscope::query::active::ActiveSession;
@@ -40,6 +41,9 @@ fn session(project: &str) -> ActiveSession {
         title: None,
         model: Some("claude-fable-5-1".into()),
         last_write: NOW - 120,
+        state: "working",
+        state_since: None,
+        pid: None,
         cost_so_far: Some(1.5),
         priced_so_far: 1.5,
         cost_last_hour: None,
@@ -64,7 +68,16 @@ fn state() -> TuiState {
             card("old", 10.0, false, true),
         ],
         hidden_limits: 2,
-        active: vec![session("/home/u/my-proj")],
+        active: vec![
+            session("/home/u/my-proj"),
+            ActiveSession {
+                session_id: "s2".into(),
+                state: "idle",
+                state_since: Some(NOW - 300),
+                pid: Some(42),
+                ..session("/home/u/other")
+            },
+        ],
         status: "agy: not found on PATH".into(),
     }
 }
@@ -97,6 +110,9 @@ fn renders_totals_limits_and_sessions() {
         "my-proj",
         "claude-fable-5-1",
         "$1.50",
+        "Sessions: 2 open · 1 working",
+        "working",
+        "idle 5m",
         "Estimates at API list prices, not your bill.",
         "agy: not found",
         "+2 old or overflow cards",
@@ -140,7 +156,15 @@ fn build_state_hides_dead_cards_and_uses_injected_now() {
     snap("live", NOW + 1000, NOW - 10);
     snap("dead", NOW - 5000, NOW - 99_999); // expired and stale
     conn.execute("INSERT INTO sessions(vendor,session_id,project,title,source_path,last_write) VALUES('claude','s1','/a/b/proj',NULL,'x',?1)", [NOW - 30]).unwrap();
-    let st = tui::build_state(&conn, &prices, &cfg, NOW, "ok".into()).unwrap();
+    let st = tui::build_state(
+        &conn,
+        &prices,
+        &cfg,
+        &OpenSessions::default(),
+        NOW,
+        "ok".into(),
+    )
+    .unwrap();
     let scopes: Vec<_> = st
         .limits
         .iter()

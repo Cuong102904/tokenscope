@@ -31,6 +31,7 @@ fn forbidden_paths() {
         "/h/.claude/.credentials.json",
         "/h/x/oauth_tokens.json",
         "/h/.local/share/opencode/auth.json",
+        "/h/.claude/sessions/10371.a9fb0839d06b495f.key",
     ] {
         assert!(safety::is_forbidden(Path::new(p)), "{p}");
     }
@@ -39,6 +40,9 @@ fn forbidden_paths() {
     )));
     assert!(!safety::is_forbidden(Path::new(
         "/h/.codex/multi-auth/quota-cache.json"
+    )));
+    assert!(!safety::is_forbidden(Path::new(
+        "/h/.claude/sessions/10371.json"
     )));
     assert!(!safety::is_forbidden(Path::new(
         "/h/.claude/projects/-home-u-token-counter/s1.jsonl"

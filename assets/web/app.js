@@ -201,7 +201,7 @@ async function renderOverview() {
     kpi('Today', totalText(d.totals_today), totalSub(d.totals_today)),
     kpi('7 days', totalText(d.totals_7d), totalSub(d.totals_7d)),
     kpi('30 days', totalText(d.totals_30d), totalSub(d.totals_30d)),
-    kpi('Active now', num(d.active_count), Number(d.active_count) === 1 ? 'session' : 'sessions'),
+    kpi('Open sessions', num(d.active_open), num(d.active_working) + ' working'),
   ].join('');
   setWarn(d.totals_30d.unpriced_models);
   drawDaily('cOvDaily', d.daily);
@@ -700,16 +700,27 @@ async function renderSkills() {
 const agoShort = ts => { const d = Math.max(0, Math.round(nowSec() - ts)); return d < 60 ? d + 's ago' : dur(d) + ' ago'; };
 const th = (h, l) => `<th${l ? ' class="l"' : ''}>${esc(h)}</th>`;
 const td = (v, l) => `<td${l ? ' class="l"' : ''}>${esc(v)}</td>`;
+// "Working", or "Idle · 12 min" in muted text; a session without a visible process is
+// listed because its log was just written, so it counts as working
+function stateCell(s, activeMinutes) {
+  if (s.state === 'idle') {
+    const since = s.state_since ? ' · ' + dur(nowSec() - s.state_since) : '';
+    return `<td class="l" style="color:var(--mute)" title="Open, waiting for input">Idle${esc(since)}</td>`;
+  }
+  const why = s.pid ? 'Open and producing output' : `Log written in the last ${activeMinutes} minutes (no open process seen for this agent)`;
+  return `<td class="l" style="color:var(--ok)" title="${esc(why)}">Working</td>`;
+}
 async function renderActive() {
   const d = await getJson('/api/active?' + apiQuery());
   const ss = d.sessions;
-  $('actCount').textContent = plural(ss.length, 'session') + ' · refreshes every 10 s';
-  $('tActive').innerHTML = '<thead><tr>' + [['Vendor', 1], ['Project', 1], ['Model', 1], ['Updated', 0], ['Cost so far', 0], ['Cost, last hour', 0]]
+  const working = ss.filter(s => s.state === 'working').length;
+  $('actCount').textContent = `${num(ss.length)} open · ${num(working)} working · refreshes every 10 s`;
+  $('tActive').innerHTML = '<thead><tr>' + [['Vendor', 1], ['Project', 1], ['Model', 1], ['State', 1], ['Updated', 0], ['Cost so far', 0], ['Cost, last hour', 0]]
     .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +
     (ss.length ? ss.map(s => `<tr title="${esc(s.title || s.session_id)}">` + td(vendorName(s.vendor), 1) +
       `<td class="l"><span title="${esc(s.project)}">${esc(projName(s.project))}</span></td>` + td(s.model || '—', 1) +
-      td(agoShort(s.last_write)) + td(costText(s.cost_so_far, s.priced_so_far)) + td(costText(s.cost_last_hour, s.priced_last_hour)) + '</tr>').join('')
-      : `<tr><td colspan="6" class="empty">No sessions active in the last ${esc(d.active_minutes)} minutes</td></tr>`) + '</tbody>';
+      stateCell(s, d.active_minutes) + td(agoShort(s.last_write)) + td(costText(s.cost_so_far, s.priced_so_far)) + td(costText(s.cost_last_hour, s.priced_last_hour)) + '</tr>').join('')
+      : `<tr><td colspan="7" class="empty">No open sessions, and none written in the last ${esc(d.active_minutes)} minutes</td></tr>`) + '</tbody>';
   const when = ts => ts ? fmtTs(ts) + ' · ' + agoShort(ts) : '—';
   $('tSources').innerHTML = '<thead><tr>' + [['Vendor', 1], ['Found', 1], ['Total records', 0], ['New records (last run)', 0], ['Latest limit reading', 0], ['Last run', 0], ['Error / details', 1]]
     .map(([h, l]) => th(h, l)).join('') + '</tr></thead><tbody>' +

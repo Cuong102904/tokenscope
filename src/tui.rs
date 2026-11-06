@@ -7,6 +7,7 @@ use crate::adapters::agy;
 use crate::collect::{self, Tick};
 use crate::config::Config;
 use crate::db;
+use crate::open_sessions::{self, OpenSessions};
 use crate::paths::Paths;
 use crate::pricing::PriceTable;
 use crate::query::Filter;
@@ -50,6 +51,7 @@ pub fn build_state(
     conn: &Connection,
     prices: &PriceTable,
     cfg: &Config,
+    open: &OpenSessions,
     now: i64,
     status: String,
 ) -> anyhow::Result<TuiState> {
@@ -67,7 +69,7 @@ pub fn build_state(
         d30: cost::totals(conn, prices, &Filter::days(30))?,
         hidden_limits: total - limits.len(),
         limits,
-        active: active::list(conn, prices, cfg, now)?,
+        active: active::list(conn, prices, cfg, open, now)?,
         status,
     })
 }
@@ -238,11 +240,12 @@ fn render_limits(f: &mut Frame, st: &TuiState, area: Rect) {
 }
 
 fn render_active(f: &mut Frame, st: &TuiState, area: Rect) {
+    let (open, working) = active::counts(&st.active);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!("Active sessions ({})", st.active.len()));
+        .title(format!("Sessions: {open} open · {working} working"));
     if st.active.is_empty() {
-        f.render_widget(Paragraph::new("No active sessions.").block(block), area);
+        f.render_widget(Paragraph::new("No open sessions.").block(block), area);
         return;
     }
     let rows = st.active.iter().map(|s| {
@@ -250,6 +253,7 @@ fn render_active(f: &mut Frame, st: &TuiState, area: Rect) {
             s.vendor.clone(),
             project_name(&s.project).to_string(),
             s.model.clone().unwrap_or_else(|| "?".into()),
+            state_text(st.now, s),
             ago(st.now, s.last_write),
             opt_cost(s.cost_so_far, s.priced_so_far),
         ])
@@ -260,10 +264,22 @@ fn render_active(f: &mut Frame, st: &TuiState, area: Rect) {
         Constraint::Min(10),
         Constraint::Length(10),
         Constraint::Length(10),
+        Constraint::Length(10),
     ];
-    let header = Row::new(["vendor", "project", "model", "updated", "cost"])
+    let header = Row::new(["vendor", "project", "model", "state", "updated", "cost"])
         .style(Style::new().add_modifier(Modifier::BOLD));
     f.render_widget(Table::new(rows, widths).header(header).block(block), area);
+}
+
+/// "working", or "idle 12m" (how long it has waited, when the agent reports it).
+fn state_text(now: i64, s: &ActiveSession) -> String {
+    match (s.state, s.state_since) {
+        (active::IDLE, Some(t)) => match ago(now, t).strip_suffix(" ago") {
+            Some(d) => format!("idle {d}"),
+            None => "idle".into(), // "just now"
+        },
+        (state, _) => state.to_string(),
+    }
 }
 
 enum Cmd {
@@ -416,13 +432,22 @@ pub fn run(paths: Paths) -> anyhow::Result<()> {
             return Err(e.into());
         }
     }
-    let res = event_loop(&mut terminal, &reader, &prices, &cfg, &cmd_tx, &msg_rx);
+    let res = event_loop(
+        &mut terminal,
+        &paths,
+        &reader,
+        &prices,
+        &cfg,
+        &cmd_tx,
+        &msg_rx,
+    );
     ratatui::restore();
     res
 }
 
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
+    paths: &Paths,
     reader: &Connection,
     prices: &PriceTable,
     cfg: &Config,
@@ -444,6 +469,7 @@ fn event_loop(
                     reader,
                     prices,
                     cfg,
+                    &open_sessions::scan(paths),
                     chrono::Utc::now().timestamp(),
                     status.clone(),
                 ),
