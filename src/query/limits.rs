@@ -15,6 +15,8 @@ const ETA_LOOKBACK_SECS: i64 = 3600;
 const ETA_MIN_POINTS: usize = 3;
 const ETA_MIN_SPAN_SECS: i64 = 600;
 
+/// An account with no reading for this many days is no longer shown.
+pub const FORGET_AFTER_DAYS: i64 = 30;
 pub const EXPIRED_NOTE: &str = "reset, waiting for a new reading";
 pub const NO_DATA_NOTE: &str = "No rate-limit data yet. Click Refresh Claude on the Limits tab, or add the status line: `tokenscope statusline --print-snippet`";
 pub const UNKNOWN_ACCOUNT_LABEL: &str = "old logs without an account ID";
@@ -137,7 +139,23 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
         (Some(p), Some((_, Some(now_p)))) => p == *now_p,
         _ => true,
     };
-    let rows: Vec<LimitCard> = rows.iter().filter(|c| current_plan(c)).cloned().collect();
+    // Accounts not read for FORGET_AFTER_DAYS are gone from view (old account-less Codex
+    // logs, an account no longer used); their history stays in the database.
+    let mut newest: HashMap<(&str, &str), i64> = HashMap::new();
+    for c in &rows {
+        let e = newest
+            .entry((c.vendor.as_str(), c.account.as_str()))
+            .or_insert(i64::MIN);
+        *e = (*e).max(c.measured_at);
+    }
+    let recent = |c: &LimitCard| {
+        newest[&(c.vendor.as_str(), c.account.as_str())] >= now - FORGET_AFTER_DAYS * 86400
+    };
+    let rows: Vec<LimitCard> = rows
+        .iter()
+        .filter(|c| current_plan(c) && recent(c))
+        .cloned()
+        .collect();
     let mut cards = vec![];
     for c in rows {
         let mut c = c;

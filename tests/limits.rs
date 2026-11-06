@@ -641,3 +641,73 @@ fn windows_of_an_older_plan_are_dropped() {
         ]
     );
 }
+
+#[test]
+fn accounts_without_a_reading_for_30_days_are_hidden() {
+    let (_d, c) = setup();
+    let now = 100_000_000;
+    // old Codex logs without an account: last seen 70 days ago, long reset
+    snap(
+        &c,
+        "codex",
+        "",
+        "five_hour",
+        300,
+        79.0,
+        now - 70 * 86400 + 3600,
+        now - 70 * 86400,
+    );
+    snap(
+        &c,
+        "codex",
+        "",
+        "weekly",
+        10080,
+        59.0,
+        now - 65 * 86400,
+        now - 70 * 86400,
+    );
+    // another account read 3 days ago stays, even though its reading is stale
+    snap(
+        &c,
+        "codex",
+        "b6e929bc",
+        "monthly",
+        43200,
+        46.0,
+        now + 19 * 86400,
+        now - 3 * 86400,
+    );
+    // one fresh window keeps the whole account, old windows of it included
+    snap(
+        &c,
+        "codex",
+        "f8ce04de",
+        "five_hour",
+        300,
+        39.0,
+        now + 3600,
+        now - 60,
+    );
+    snap(
+        &c,
+        "codex",
+        "f8ce04de",
+        "weekly",
+        10080,
+        50.0,
+        now - 40 * 86400,
+        now - 45 * 86400,
+    );
+    let cards = limits::current(&c, &Config::default(), now).unwrap();
+    let mut got: Vec<_> = cards
+        .iter()
+        .filter(|x| !x.no_data)
+        .map(|x| format!("{}:{}", x.account, x.scope))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        ["b6e929bc:monthly", "f8ce04de:five_hour", "f8ce04de:weekly"]
+    );
+}
