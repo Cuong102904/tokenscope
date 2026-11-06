@@ -13,7 +13,8 @@ pub struct Config {
     /// Account labels keyed like `"codex:f8ce04de"`.
     #[serde(rename = "labels")]
     pub account_labels: HashMap<String, String>,
-    /// A session counts as active when written within this many minutes.
+    /// A session whose process cannot be seen counts as working when written within this
+    /// many minutes (open Claude Code sessions are seen directly).
     pub active_minutes: i64,
     pub refresh_seconds: u64,
 }

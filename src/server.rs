@@ -5,6 +5,7 @@
 use crate::collect;
 use crate::config::Config;
 use crate::db;
+use crate::open_sessions;
 use crate::paths::Paths;
 use crate::pricing::PriceTable;
 use crate::query::{Filter, active, cost, limits, sessions, skills};
@@ -168,7 +169,8 @@ where
 }
 
 /// Fixed windows (today / 7 / 30 days); vendor, model and project filters still apply.
-/// `limits_mini` is the same card list as `/api/limits?vendor=…`; `active_count` counts `/api/active` with the same filter.
+/// `limits_mini` is the same card list as `/api/limits?vendor=…`; `active_open` and
+/// `active_working` count `/api/active` with the same filter.
 async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
     let f = p.filter()?;
     with_db(st, move |c, st| {
@@ -177,11 +179,13 @@ async fn overview(State(st): State<AppState>, Query(p): Query<Params>) -> ApiRes
             ..f.clone()
         };
         let now = chrono::Utc::now().timestamp();
+        let (open, working) = active::counts(&active_filtered(c, st, &f, now)?);
         Ok(serde_json::json!({
             "totals_today": cost::totals(c, &st.prices, &w(1))?,
             "totals_7d": cost::totals(c, &st.prices, &w(7))?,
             "totals_30d": cost::totals(c, &st.prices, &w(30))?,
-            "active_count": active_filtered(c, st, &f, now)?.len(),
+            "active_open": open,
+            "active_working": working,
             "daily": cost::daily(c, &st.prices, &w(30))?,
             "limits_mini": of_vendor(limits::current(c, &st.cfg, now)?, &f.vendor, |x| &x.vendor),
         }))
@@ -238,17 +242,20 @@ fn of_vendor<T>(mut rows: Vec<T>, vendor: &Option<String>, key: impl Fn(&T) -> &
     rows
 }
 
-/// Active sessions matching the vendor / project / model filter (`days` does not apply:
-/// "active" is always the last `active_minutes`). A session's model is its latest one.
+/// Open and just-written sessions matching the vendor / project / model filter (`days` does
+/// not apply: this is always "now"). A session's model is its latest one.
 fn active_filtered(
     c: &rusqlite::Connection,
     st: &AppState,
     f: &Filter,
     now: i64,
 ) -> anyhow::Result<Vec<active::ActiveSession>> {
-    let mut v = of_vendor(active::list(c, &st.prices, &st.cfg, now)?, &f.vendor, |s| {
-        &s.vendor
-    });
+    let open = open_sessions::scan(&st.paths);
+    let mut v = of_vendor(
+        active::list(c, &st.prices, &st.cfg, &open, now)?,
+        &f.vendor,
+        |s| &s.vendor,
+    );
     if let Some(p) = &f.project {
         v.retain(|s| &s.project == p);
     }

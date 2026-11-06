@@ -3,6 +3,7 @@ pub mod collect;
 pub mod config;
 pub mod db;
 pub mod model;
+pub mod open_sessions;
 pub mod paths;
 pub mod pricing;
 pub mod query;

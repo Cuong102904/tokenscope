@@ -3,7 +3,7 @@ use std::io;
 use std::path::Path;
 
 /// Hard-coded never-read list, matched on the FILE NAME only: auth.json,
-/// openai-codex-accounts.json*, .credentials.json, oauth*.json, and any name
+/// openai-codex-accounts.json*, .credentials.json, oauth*.json, *.key, and any name
 /// containing "credential" or "token".
 pub fn is_forbidden(p: &Path) -> bool {
     let name = p
@@ -12,6 +12,7 @@ pub fn is_forbidden(p: &Path) -> bool {
         .unwrap_or_default();
     name.contains("credential")
         || name.contains("token")
+        || name.ends_with(".key")
         || name == "auth.json"
         || name.starts_with("openai-codex-accounts.json")
         || (name.starts_with("oauth") && name.ends_with(".json"))
