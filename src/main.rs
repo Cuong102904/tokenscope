@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
-use tokenscope::adapters::agy;
+use tokenscope::adapters::refresh::RefreshOutcome;
+use tokenscope::adapters::{agy, claude_usage, codex_usage};
 use tokenscope::collect::{self, AdapterStatus};
 use tokenscope::config::Config;
 use tokenscope::db;
@@ -64,7 +65,7 @@ enum Cmd {
     Status {
         #[arg(long)]
         json: bool,
-        /// Also run `agy -p "/usage"` (at most once per 5 minutes) and show its weekly limits
+        /// Also ask `claude`, `codex` and `agy` for their current limits (each at most once per 5 minutes)
         #[arg(long)]
         refresh: bool,
     },
@@ -82,16 +83,16 @@ fn collect_once(paths: &Paths) -> anyhow::Result<(Connection, Config, Vec<Adapte
     Ok((conn, cfg, st))
 }
 
-/// Latest agy weekly snapshot per scope: (scope, used_percent, resets_at, measured_at).
-fn agy_rows(conn: &Connection) -> Vec<(String, f64, Option<i64>, i64)> {
+/// Latest snapshot per scope of `vendor`: (scope, used_percent, resets_at, measured_at).
+fn limit_rows(conn: &Connection, vendor: Vendor) -> Vec<(String, f64, Option<i64>, i64)> {
     let Ok(mut st) = conn.prepare(
-        "SELECT scope, used_percent, resets_at, measured_at FROM limit_snapshots l WHERE vendor='agy'
-         AND measured_at=(SELECT max(measured_at) FROM limit_snapshots WHERE vendor='agy' AND scope=l.scope AND account=l.account)
+        "SELECT scope, used_percent, resets_at, measured_at FROM limit_snapshots l WHERE vendor=?1
+         AND measured_at=(SELECT max(measured_at) FROM limit_snapshots WHERE vendor=?1 AND scope=l.scope AND account=l.account)
          ORDER BY scope",
     ) else {
         return vec![];
     };
-    let rows = st.query_map([], |r| {
+    let rows = st.query_map([vendor.as_str()], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, f64>(1)?,
@@ -102,12 +103,12 @@ fn agy_rows(conn: &Connection) -> Vec<(String, f64, Option<i64>, i64)> {
     rows.into_iter().flatten().flatten().collect()
 }
 
-/// `agy <scope>: N% used (resets <local time>)` lines.
-fn print_agy(conn: &Connection, note: Option<&str>) {
+/// `<vendor> <scope>: N% used (resets <local time>)` lines.
+fn print_limits(conn: &Connection, vendor: Vendor, note: Option<&str>) {
     if let Some(n) = note {
         println!("{n}");
     }
-    for (scope, used, resets, at) in agy_rows(conn) {
+    for (scope, used, resets, at) in limit_rows(conn, vendor) {
         let fmt = |t: i64| {
             chrono::DateTime::from_timestamp(t, 0)
                 .map(|d| {
@@ -118,7 +119,8 @@ fn print_agy(conn: &Connection, note: Option<&str>) {
                 .unwrap_or_default()
         };
         println!(
-            "agy {scope}: {used:.0}% used (resets {}, measured {})",
+            "{} {scope}: {used:.0}% used (resets {}, measured {})",
+            vendor.as_str(),
             resets.map(fmt).unwrap_or_else(|| "?".into()),
             fmt(at)
         );
@@ -211,19 +213,23 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Status { json, refresh } => {
             let (mut conn, cfg, _) = collect_once(&paths)?;
-            let agy_note = if refresh {
-                match agy::refresh(&paths, &cfg, &mut conn) {
-                    Ok(agy::RefreshOutcome::Ran) => None,
-                    Ok(agy::RefreshOutcome::Throttled { next_allowed }) => Some(format!(
-                        "agy: refreshed recently, next allowed at epoch {next_allowed}"
-                    )),
-                    Ok(agy::RefreshOutcome::NotInstalled) => {
-                        Some("agy: not found on PATH".to_string())
-                    }
-                    Err(e) => Some(format!("agy: refresh failed: {e:#}")),
-                }
+            // `--refresh` asks each CLI for its limits (each at most once per 5 minutes)
+            let note = |name: &str, r: anyhow::Result<RefreshOutcome>| match r {
+                Ok(RefreshOutcome::Ran) => None,
+                Ok(RefreshOutcome::Throttled { next_allowed }) => Some(format!(
+                    "{name}: refreshed recently, next allowed at epoch {next_allowed}"
+                )),
+                Ok(RefreshOutcome::NotInstalled) => Some(format!("{name}: not found on PATH")),
+                Err(e) => Some(format!("{name}: refresh failed: {e:#}")),
+            };
+            let (agy_note, claude_note, codex_note) = if refresh {
+                (
+                    note("agy", agy::refresh(&paths, &cfg, &mut conn)),
+                    note("claude", claude_usage::refresh(&paths, &cfg, &mut conn)),
+                    note("codex", codex_usage::refresh(&paths, &cfg, &mut conn)),
+                )
             } else {
-                None
+                (None, None, None)
             };
             let prices = PriceTable::load(&paths)?;
             let t = |f: Filter| cost::totals(&conn, &prices, &f);
@@ -240,11 +246,17 @@ fn main() -> anyhow::Result<()> {
                 });
                 let mut v = v;
                 if refresh {
-                    let snaps: Vec<_> = agy_rows(&conn)
-                        .into_iter()
-                        .map(|(scope, used, resets, at)| serde_json::json!({"scope": scope, "used_percent": used, "resets_at": resets, "measured_at": at}))
-                        .collect();
-                    v["agy"] = serde_json::json!({"snapshots": snaps, "note": agy_note});
+                    let snaps = |vendor| -> Vec<_> {
+                        limit_rows(&conn, vendor)
+                            .into_iter()
+                            .map(|(scope, used, resets, at)| serde_json::json!({"scope": scope, "used_percent": used, "resets_at": resets, "measured_at": at}))
+                            .collect()
+                    };
+                    v["agy"] =
+                        serde_json::json!({"snapshots": snaps(Vendor::Agy), "note": agy_note});
+                    v["claude"] = serde_json::json!({"snapshots": snaps(Vendor::Claude), "note": claude_note});
+                    v["codex"] =
+                        serde_json::json!({"snapshots": snaps(Vendor::Codex), "note": codex_note});
                 }
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
@@ -264,7 +276,9 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 if refresh {
-                    print_agy(&conn, agy_note.as_deref());
+                    print_limits(&conn, Vendor::Claude, claude_note.as_deref());
+                    print_limits(&conn, Vendor::Codex, codex_note.as_deref());
+                    print_limits(&conn, Vendor::Agy, agy_note.as_deref());
                 }
                 println!("{DISCLAIMER}");
             }
