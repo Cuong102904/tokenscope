@@ -88,7 +88,7 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const SLOTS = 8;
 const OTHER = 'Other';
 const slotOf = new Map();       // model name -> slot 1..8, assigned once per page load
-const VENDOR_SLOT = {claude: 2, codex: 3, opencode: 1, agy: 7};
+const VENDOR_SLOT = {claude: 2, codex: 3, opencode: 1, agy: 7, pi: 5};
 function modelColor(m) {
   if (m === OTHER) return css('--other');
   if (!slotOf.has(m) && slotOf.size < SLOTS) slotOf.set(m, slotOf.size + 1);
@@ -215,7 +215,7 @@ async function renderOverview() {
 }
 
 // ---------- limits ----------
-const VENDOR_NAME = {claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', agy: 'Antigravity (agy)'};
+const VENDOR_NAME = {claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', agy: 'Antigravity (agy)', pi: 'Pi'};
 const vendorName = v => VENDOR_NAME[v] || v;
 const SCOPE_BASE = {five_hour: '5-hour', weekly: 'Weekly', seven_day: 'Weekly', monthly: 'Monthly'};
 // "five_hour" -> "5-hour", "weekly:Gemini" -> "Weekly · Gemini", "x:window_90m" -> "90-min · x"
