@@ -35,7 +35,7 @@ pub struct PriceTable {
 }
 
 impl PriceTable {
-    /// A user file at `~/.agent-usage/pricing.toml` replaces the embedded
+    /// A user file at `~/.tokenscope/pricing.toml` replaces the embedded
     /// default entirely; a parse error in it is an error.
     pub fn load(paths: &Paths) -> anyhow::Result<PriceTable> {
         let user = paths.data_dir().join("pricing.toml");

@@ -1,8 +1,8 @@
-use agent_usage::adapters::{Adapter, CollectCtx, claude::ClaudeAdapter, codex::CodexAdapter};
-use agent_usage::query::{Filter, skills};
-use agent_usage::{config::Config, db, paths::Paths, pricing::PriceTable, scan};
 use rusqlite::Connection;
 use std::path::Path;
+use tokenscope::adapters::{Adapter, CollectCtx, claude::ClaudeAdapter, codex::CodexAdapter};
+use tokenscope::query::{Filter, skills};
+use tokenscope::{config::Config, db, paths::Paths, pricing::PriceTable, scan};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();

@@ -1,8 +1,8 @@
-use agent_usage::config::Config;
-use agent_usage::db;
-use agent_usage::paths::Paths;
-use agent_usage::query::limits::{self, EtaResult, LimitCard};
 use rusqlite::{Connection, params};
+use tokenscope::config::Config;
+use tokenscope::db;
+use tokenscope::paths::Paths;
+use tokenscope::query::limits::{self, EtaResult, LimitCard};
 
 const NOW: i64 = 1_800_000_000;
 const MIN: i64 = 60;
@@ -166,7 +166,7 @@ fn current_takes_latest_per_key_and_labels() {
     assert!(ph.no_data);
     assert!(
         ph.eta_note
-            .contains("agent-usage statusline --print-snippet"),
+            .contains("tokenscope statusline --print-snippet"),
         "{}",
         ph.eta_note
     );
@@ -576,7 +576,7 @@ fn collect_run_all_downsamples_once_a_day() {
         old + DAY,
         old / 300 * 300 + MIN,
     );
-    agent_usage::collect::run_all(&mut c, &paths, &Config::default(), &[]);
+    tokenscope::collect::run_all(&mut c, &paths, &Config::default(), &[]);
     assert_eq!(
         count(&c, "weekly", old + DAY),
         1,

@@ -1,5 +1,5 @@
-use agent_usage::paths::Paths;
-use agent_usage::pricing::PriceTable;
+use tokenscope::paths::Paths;
+use tokenscope::pricing::PriceTable;
 
 fn embedded() -> PriceTable {
     let dir = tempfile::tempdir().unwrap();

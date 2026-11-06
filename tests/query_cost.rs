@@ -1,10 +1,10 @@
-use agent_usage::config::Config;
-use agent_usage::query::{Filter, cost, sessions};
-use agent_usage::{db, paths::Paths, pricing::PriceTable};
 use chrono::{Duration, Local};
 use rusqlite::Connection;
 use std::path::Path;
 use std::process::Command;
+use tokenscope::config::Config;
+use tokenscope::query::{Filter, cost, sessions};
+use tokenscope::{db, paths::Paths, pricing::PriceTable};
 
 const FABLE: &str = "claude-fable-5-1"; // in $10 / out $50 per 1M
 
@@ -75,14 +75,14 @@ fn collected_day(tz: &str) -> String {
 "#,
     )
     .unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+    let o = Command::new(env!("CARGO_BIN_EXE_tokenscope"))
         .arg("collect")
         .env("HOME", h.path())
         .env("TZ", tz)
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let c = Connection::open(h.path().join(".agent-usage/agent-usage.db")).unwrap();
+    let c = Connection::open(h.path().join(".tokenscope/tokenscope.db")).unwrap();
     c.query_row("SELECT day FROM usage", [], |r| r.get(0))
         .unwrap()
 }
@@ -428,7 +428,7 @@ fn session_models_sorted_by_row_count_and_grouped_by_vendor() {
 
 #[test]
 fn totals_display_rule() {
-    use agent_usage::query::cost::Totals;
+    use tokenscope::query::cost::Totals;
     let t = |cost: f64, unpriced: &[&str], messages: u64| Totals {
         cost,
         unpriced_models: unpriced.iter().map(|s| s.to_string()).collect(),

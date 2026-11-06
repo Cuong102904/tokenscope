@@ -1,13 +1,13 @@
-use agent_usage::config::Config;
-use agent_usage::db;
-use agent_usage::paths::Paths;
-use agent_usage::pricing::PriceTable;
-use agent_usage::query::active::ActiveSession;
-use agent_usage::query::cost::Totals;
-use agent_usage::query::limits::LimitCard;
-use agent_usage::tui::{self, TuiState};
 use chrono::{Local, TimeZone};
 use ratatui::{Terminal, backend::TestBackend};
+use tokenscope::config::Config;
+use tokenscope::db;
+use tokenscope::paths::Paths;
+use tokenscope::pricing::PriceTable;
+use tokenscope::query::active::ActiveSession;
+use tokenscope::query::cost::Totals;
+use tokenscope::query::limits::LimitCard;
+use tokenscope::tui::{self, TuiState};
 
 const NOW: i64 = 1_800_000_000;
 
@@ -156,7 +156,7 @@ fn build_state_hides_dead_cards_and_uses_injected_now() {
 
 #[test]
 fn hook_skips_only_the_worker_thread() {
-    assert!(tui::is_worker_thread(Some("agent-usage-collector")));
+    assert!(tui::is_worker_thread(Some("tokenscope-collector")));
     assert!(!tui::is_worker_thread(Some("main")));
     assert!(!tui::is_worker_thread(None));
 }

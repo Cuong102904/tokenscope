@@ -1,7 +1,7 @@
-use agent_usage::adapters::{Adapter, CollectCtx, opencode::OpenCodeAdapter};
-use agent_usage::{collect, config::Config, db, paths::Paths};
 use rusqlite::Connection;
 use std::path::Path;
+use tokenscope::adapters::{Adapter, CollectCtx, opencode::OpenCodeAdapter};
+use tokenscope::{collect, config::Config, db, paths::Paths};
 
 struct Env {
     _d: tempfile::TempDir,

@@ -1,12 +1,12 @@
-use agent_usage::config::Config;
-use agent_usage::server::{self, AppState};
-use agent_usage::{db, paths::Paths, pricing::PriceTable};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Duration, Local};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::sync::Arc;
+use tokenscope::config::Config;
+use tokenscope::server::{self, AppState};
+use tokenscope::{db, paths::Paths, pricing::PriceTable};
 use tower::ServiceExt;
 
 fn day(ago: i64) -> String {
@@ -289,9 +289,9 @@ fn collector_retries_failed_open() {
     let paths = Paths {
         home: d.path().to_path_buf(),
     };
-    // ~/.agent-usage is a plain file: the DB cannot be created
+    // ~/.tokenscope is a plain file: the DB cannot be created
     std::fs::write(paths.data_dir(), "x").unwrap();
-    let mut c = agent_usage::collect::Collector::new(paths.clone(), Config::default());
+    let mut c = tokenscope::collect::Collector::new(paths.clone(), Config::default());
     assert!(!c.tick().ok());
     assert!(!c.tick().ok());
     assert_eq!(c.take_log().len(), 1, "open failure logged once per streak");
@@ -406,7 +406,7 @@ async fn api_limits_refresh_agy() {
     // without the same-origin header (e.g. an <img> on another site): refused
     let (s, _) = get(&st, "/api/limits?refresh=agy").await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    let (s, b) = get_with(&st, "/api/limits?refresh=agy", &[("x-agent-usage", "1")]).await;
+    let (s, b) = get_with(&st, "/api/limits?refresh=agy", &[("x-tokenscope", "1")]).await;
     assert_eq!(s, StatusCode::OK, "{b}");
     let v: Value = serde_json::from_str(&b).unwrap();
     let status = v["refresh"]["status"].as_str().unwrap();
@@ -415,6 +415,6 @@ async fn api_limits_refresh_agy() {
         assert_eq!(v["refresh"]["next_allowed"], now + 300);
     }
     assert_eq!(v["cards"].as_array().unwrap().len(), 2);
-    let (s, _) = get_with(&st, "/api/limits?refresh=other", &[("x-agent-usage", "1")]).await;
+    let (s, _) = get_with(&st, "/api/limits?refresh=other", &[("x-tokenscope", "1")]).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }

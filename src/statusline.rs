@@ -1,4 +1,4 @@
-//! `agent-usage statusline`: hot path run by Claude Code on every refresh.
+//! `tokenscope statusline`: hot path run by Claude Code on every refresh.
 //! Must stay fast: no SQLite, no price table, every failure swallowed.
 use crate::paths::Paths;
 use serde_json::Value;
@@ -191,7 +191,7 @@ pub fn run(args: &Args, paths: Option<&Paths>) {
             .account
             .clone()
             .or_else(|| {
-                std::env::var("AGENT_USAGE_ACCOUNT")
+                std::env::var("TOKENSCOPE_ACCOUNT")
                     .ok()
                     .filter(|a| !a.is_empty())
             })
@@ -238,8 +238,8 @@ pub fn print_snippet(paths: &Paths) -> String {
         .and_then(|v| v["statusLine"]["command"].as_str().map(String::from));
     let mut note = String::new();
     let command = match existing {
-        Some(cmd) if cmd.contains("agent-usage statusline") => {
-            note.push_str("settings.json already uses agent-usage statusline; the saved wrapped command was left untouched.\n");
+        Some(cmd) if cmd.contains("tokenscope statusline") => {
+            note.push_str("settings.json already uses tokenscope statusline; the saved wrapped command was left untouched.\n");
             wrapped_command()
         }
         Some(cmd) => {
@@ -253,11 +253,11 @@ pub fn print_snippet(paths: &Paths) -> String {
                     note.push_str(&format!(
                         "could not save the existing command ({e}); snippet has no --wrap-file.\n"
                     ));
-                    "agent-usage statusline --show".to_string()
+                    "tokenscope statusline --show".to_string()
                 }
             }
         }
-        None => "agent-usage statusline --show".to_string(),
+        None => "tokenscope statusline --show".to_string(),
     };
     let snippet = serde_json::json!({"statusLine": {"type": "command", "command": command}});
     format!(
@@ -267,5 +267,5 @@ pub fn print_snippet(paths: &Paths) -> String {
 }
 
 fn wrapped_command() -> String {
-    format!("agent-usage statusline --wrap-file ~/.agent-usage/{WRAPPED_FILE} --show")
+    format!("tokenscope statusline --wrap-file ~/.tokenscope/{WRAPPED_FILE} --show")
 }

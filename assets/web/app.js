@@ -1,5 +1,5 @@
 'use strict';
-// agent-usage dashboard. Filters live in the query string, the tab in the hash.
+// tokenscope dashboard. Filters live in the query string, the tab in the hash.
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtMoney = v => '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -319,7 +319,7 @@ async function refreshAgy() {
   b.disabled = true;
   $('agyMsg').textContent = 'đang chạy agy /usage… (tối đa 30 giây)';
   try {
-    const r = await fetch('/api/limits?refresh=agy', {cache: 'no-store', headers: {'X-Agent-Usage': '1'}});
+    const r = await fetch('/api/limits?refresh=agy', {cache: 'no-store', headers: {'X-Tokenscope': '1'}});
     if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()));
     const d = await r.json();
     $('agyMsg').textContent = agyText(d.refresh);

@@ -1,9 +1,9 @@
-use agent_usage::adapters::agy::{self, AgyAdapter, RefreshOutcome};
-use agent_usage::adapters::{Adapter, CollectCtx};
-use agent_usage::{config::Config, db, paths::Paths};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use tokenscope::adapters::agy::{self, AgyAdapter, RefreshOutcome};
+use tokenscope::adapters::{Adapter, CollectCtx};
+use tokenscope::{config::Config, db, paths::Paths};
 
 const FIXTURE: &str = include_str!("fixtures/agy/usage.txt");
 const RESET: i64 = 1_794_182_400; // 2026-11-09T00:00:00Z
@@ -124,7 +124,7 @@ fn email_never_stored_raw() {
     let h = agy::account_hint(d.path());
     assert_eq!(h.len(), 8);
     assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
-    assert_eq!(h, agent_usage::model::sha8("me@example.com"));
+    assert_eq!(h, tokenscope::model::sha8("me@example.com"));
     assert_eq!(agy::account_hint(&d.path().join("missing")), "");
 }
 
@@ -162,7 +162,7 @@ fn status_refresh_prints_agy_lines() {
         bindir.path().display(),
         std::env::var("PATH").unwrap()
     );
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+    let o = Command::new(env!("CARGO_BIN_EXE_tokenscope"))
         .args(["status", "--refresh"])
         .env("HOME", home.path())
         .env("PATH", path)
@@ -236,7 +236,7 @@ fn status_refresh_json_has_agy_key() {
         bindir.path().display(),
         std::env::var("PATH").unwrap()
     );
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+    let o = Command::new(env!("CARGO_BIN_EXE_tokenscope"))
         .args(["status", "--refresh", "--json"])
         .env("HOME", home.path())
         .env("PATH", path)

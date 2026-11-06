@@ -1,9 +1,9 @@
-use agent_usage::adapters::{Adapter, CollectCtx, Discovery, claude::ClaudeAdapter};
-use agent_usage::collect::run_all;
-use agent_usage::model::{Batch, Vendor};
-use agent_usage::{config::Config, db, paths::Paths};
 use std::path::Path;
 use std::process::Command;
+use tokenscope::adapters::{Adapter, CollectCtx, Discovery, claude::ClaudeAdapter};
+use tokenscope::collect::run_all;
+use tokenscope::model::{Batch, Vendor};
+use tokenscope::{config::Config, db, paths::Paths};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
@@ -28,7 +28,7 @@ fn home() -> tempfile::TempDir {
 }
 
 fn run(home: &Path, args: &[&str]) -> (bool, String) {
-    let o = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+    let o = Command::new(env!("CARGO_BIN_EXE_tokenscope"))
         .args(args)
         .env("HOME", home)
         .output()
@@ -104,7 +104,7 @@ fn adapter_error_does_not_stop_others() {
             )
             .unwrap();
         assert_eq!(kv, 2);
-        assert!(h.path().join(".agent-usage/today.txt").exists());
+        assert!(h.path().join(".tokenscope/today.txt").exists());
     }
 }
 
@@ -116,7 +116,7 @@ fn status_prints_totals() {
     // the fixture has an unpriced model (claude-sonnet-4-5): totals are lower bounds
     assert!(out.contains("tất cả ≥ $"), "{out}");
     assert!(out.contains("n/a (no price): claude-sonnet-4-5"), "{out}");
-    let today = std::fs::read_to_string(h.path().join(".agent-usage/today.txt")).unwrap();
+    let today = std::fs::read_to_string(h.path().join(".tokenscope/today.txt")).unwrap();
     let (date, amt) = today.split_once(' ').unwrap();
     assert_eq!(date, chrono::Local::now().format("%Y-%m-%d").to_string());
     // fixture rows are dated 2026-11-05: today's text is a lower bound, or $0.00 on later days
@@ -192,7 +192,7 @@ impl Adapter for BadWrite {
         }
     }
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
-        ctx.done_files.push(agent_usage::scan::FileStamp {
+        ctx.done_files.push(tokenscope::scan::FileStamp {
             path: "/x/y.jsonl".into(),
             size: 1,
             mtime: 2,
@@ -200,7 +200,7 @@ impl Adapter for BadWrite {
         // a write cannot succeed once the table is gone
         ctx.conn.execute_batch("DROP TABLE usage")?;
         let mut b = Batch::default();
-        b.usage.push(agent_usage::model::UsageRecord {
+        b.usage.push(tokenscope::model::UsageRecord {
             msg_key: "k".into(),
             vendor: Vendor::Codex,
             account: String::new(),
@@ -239,8 +239,8 @@ fn files_not_marked_done_when_write_fails() {
     assert_eq!(n, 0);
 }
 
-fn usage_rec(key: &str, model: &str, input: u64) -> agent_usage::model::UsageRecord {
-    agent_usage::model::UsageRecord {
+fn usage_rec(key: &str, model: &str, input: u64) -> tokenscope::model::UsageRecord {
+    tokenscope::model::UsageRecord {
         msg_key: key.into(),
         vendor: Vendor::Claude,
         account: String::new(),
@@ -261,7 +261,7 @@ fn usage_rec(key: &str, model: &str, input: u64) -> agent_usage::model::UsageRec
 }
 
 /// Empty HOME whose DB already holds today's rows (no adapter finds anything).
-fn seeded_home(rows: Vec<agent_usage::model::UsageRecord>) -> tempfile::TempDir {
+fn seeded_home(rows: Vec<tokenscope::model::UsageRecord>) -> tempfile::TempDir {
     let h = tempfile::tempdir().unwrap();
     let paths = Paths {
         home: h.path().to_path_buf(),
@@ -280,7 +280,7 @@ fn seeded_home(rows: Vec<agent_usage::model::UsageRecord>) -> tempfile::TempDir 
 
 fn show(home: &Path) -> String {
     use std::io::Write;
-    let mut ch = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+    let mut ch = Command::new(env!("CARGO_BIN_EXE_tokenscope"))
         .args(["statusline", "--show"])
         .env("HOME", home)
         .stdin(std::process::Stdio::piped())
@@ -334,7 +334,7 @@ fn doctor_shows_stored_totals_and_last_limit() {
     ]);
     let at = 1_800_000_000i64;
     {
-        let c = db::open(&h.path().join(".agent-usage/agent-usage.db")).unwrap();
+        let c = db::open(&h.path().join(".tokenscope/tokenscope.db")).unwrap();
         c.execute(
             "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source) VALUES('claude','','five_hour',300,10,NULL,NULL,?1,'t')",
             [at],
@@ -389,8 +389,8 @@ impl Adapter for Toggle {
 
 #[test]
 fn collector_logs_adapter_error_once_per_streak() {
-    use agent_usage::collect::Collector;
     use std::sync::atomic::Ordering;
+    use tokenscope::collect::Collector;
     let h = tempfile::tempdir().unwrap();
     let paths = Paths {
         home: h.path().to_path_buf(),
@@ -430,7 +430,7 @@ fn collect_watch_loops_and_logs_errors_once() {
     let oc = h.path().join(".local/share/opencode/opencode.db");
     std::fs::create_dir_all(oc.parent().unwrap()).unwrap();
     std::fs::write(&oc, b"not a database at all, just text").unwrap();
-    let mut ch = Command::new(env!("CARGO_BIN_EXE_agent-usage"))
+    let mut ch = Command::new(env!("CARGO_BIN_EXE_tokenscope"))
         .args(["collect", "--watch", "--interval", "1"])
         .env("HOME", h.path())
         .stdout(std::process::Stdio::null())
@@ -448,7 +448,7 @@ fn collect_watch_loops_and_logs_errors_once() {
     assert_eq!(oc_lines.len(), 2, "error once, recovery once:\n{err}");
     assert!(!oc_lines[0].contains("ok again"), "{err}");
     assert!(oc_lines[1].ends_with("opencode: ok again"), "{err}");
-    let c = db::open(&h.path().join(".agent-usage/agent-usage.db")).unwrap();
+    let c = db::open(&h.path().join(".tokenscope/tokenscope.db")).unwrap();
     let n: i64 = c
         .query_row("SELECT count(*) FROM usage", [], |r| r.get(0))
         .unwrap();
