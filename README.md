@@ -107,7 +107,7 @@ tokenscope serve     # open http://127.0.0.1:8765
 
 Log files are only read, never modified.
 
-When a Claude or Codex window resets, the dashboard keeps the old number (muted, "before the reset") and asks the tool for a new reading on its own; agy is refreshed only by its button, because its `/usage` may use quota.
+Limits are shown one row per account, with a status column ("Available", "Limit reached until …", "No current reading"). When a Claude or Codex window resets or its reading goes stale, the dashboard keeps the old number (muted) and asks the tool for a new reading on its own; agy is refreshed only by its button, because its `/usage` may use quota. Windows last seen under an older plan (a monthly window from before a free → Plus upgrade) are dropped.
 
 ## Claude Code rate limits
 

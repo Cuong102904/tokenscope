@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::model::Vendor;
 use rusqlite::{Connection, params};
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Two measurements belong to the same window when their `resets_at` differ
 /// by at most this much (Codex reports it with ±1 s jitter).
@@ -117,9 +118,29 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
             warning: None,
         })
     })?;
+    let rows: Vec<LimitCard> = rows.collect::<Result<_, _>>()?;
+    // An account's plan is the one on its newest reading. Windows last seen under another
+    // plan (a monthly window from before a free -> plus upgrade, say) no longer apply.
+    let mut plan_now: HashMap<(&str, &str), (i64, Option<&str>)> = HashMap::new();
+    for c in &rows {
+        let e = plan_now
+            .entry((c.vendor.as_str(), c.account.as_str()))
+            .or_insert((i64::MIN, None));
+        if c.measured_at > e.0 && c.plan_type.is_some() {
+            *e = (c.measured_at, c.plan_type.as_deref());
+        }
+    }
+    let current_plan = |c: &LimitCard| match (
+        c.plan_type.as_deref(),
+        plan_now.get(&(c.vendor.as_str(), c.account.as_str())),
+    ) {
+        (Some(p), Some((_, Some(now_p)))) => p == *now_p,
+        _ => true,
+    };
+    let rows: Vec<LimitCard> = rows.iter().filter(|c| current_plan(c)).cloned().collect();
     let mut cards = vec![];
     for c in rows {
-        let mut c = c?;
+        let mut c = c;
         c.account_label = account_label(cfg, &c.vendor, &c.account);
         c.stale = now - c.measured_at > stale_after_secs(c.window_minutes);
         c.expired = c.resets_at.is_some_and(|r| r < now);
