@@ -2,7 +2,7 @@
 
 **See what your AI coding agents cost and how close you are to their rate limits, in one local dashboard.**
 
-tokenscope reads the session logs that Claude Code, OpenAI Codex CLI, OpenCode and Antigravity (`agy`) already write to your disk. It turns them into token counts, estimated cost per session, project and model, and rate-limit usage over time. Everything runs on your machine. Nothing is uploaded, and no API keys are needed.
+tokenscope reads the session logs that Claude Code, OpenAI Codex CLI, OpenCode, Pi and Antigravity (`agy`) already write to your disk. It turns them into token counts, estimated cost per session, project and model, and rate-limit usage over time. Everything runs on your machine. Nothing is uploaded, and no API keys are needed.
 
 ![tokenscope overview: daily cost by model and rate limits per account](docs/screenshots/overview-light.png)
 
@@ -26,7 +26,7 @@ Each vendor shows part of this in a different place, or not at all. tokenscope p
 
 ## Features
 
-- **Four agents, one view.** Supports Claude Code, Codex CLI, OpenCode and Antigravity. Multiple accounts per vendor are kept apart.
+- **Five agents, one view.** Supports Claude Code, Codex CLI, OpenCode, Pi and Antigravity. Multiple accounts per vendor are kept apart.
 - **Estimated cost.** Prices come from a built-in table of API list prices (`assets/pricing.toml`) and are computed at query time, so a price update applies to history too. When a model has no known price, totals say `≥ $X` or `n/a` instead of showing a silent `$0`.
 - **Rate limits.** Shows 5-hour and weekly usage %, reset times and a projected time-to-limit. Old readings are marked stale instead of being shown as current.
 - **Web dashboard** with six tabs: Overview, Limits, Cost, Sessions, Skills & tools, Active. It has a light/dark theme switch (Auto follows your system) that is remembered per browser.
@@ -55,6 +55,7 @@ Supported agents and the versions whose log formats were verified:
 | Claude Code | 2.1.318 | `~/.claude/projects/` and status line snapshots |
 | OpenAI Codex CLI | 0.165.0 | `~/.codex/sessions/` |
 | OpenCode | DB schema as of Nov 2026 | `~/.local/share/opencode/opencode.db` |
+| Pi (`pi`) | 1.5.0 (session format v3, from its source; no real sessions verified yet) | `~/.pi/agent/sessions/` |
 | Antigravity (`agy`) | 1.5.1 | `agy -p "/usage"` |
 
 The agents' log formats are undocumented and can change in any release. If a newer agent version stops showing up, run `tokenscope doctor` and open an issue with the agent's version.
@@ -113,6 +114,7 @@ tokenscope serve     # open http://127.0.0.1:8765
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | Tokens plus the rate-limit info Codex logs. |
 | Codex limits | `codex app-server` (`account/rateLimits/read`) | On demand (Refresh Codex button or `status --refresh`, at most once every 5 minutes). Structured JSON, no model call; only the signed-in account. |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Opened read-only. |
+| Pi | `~/.pi/agent/sessions/**/*.jsonl` (or `$PI_CODING_AGENT_SESSION_DIR`, `$PI_CODING_AGENT_DIR/sessions`) | Tokens, model and tool calls per reply, plus side calls such as cache warming. Pi keeps no account id, so it has no rate-limit cards. `auth.json` is never read. |
 | Antigravity | `agy -p "/usage"` | Run on demand only, at most once every 5 minutes. |
 
 Log files are only read, never modified.
