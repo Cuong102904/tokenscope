@@ -429,14 +429,28 @@ const SESS_COLS = [
 ];
 const sessKey = s => s.vendor + '/' + s.session_id;
 
+// The table shows one page; sorting covers every session, not just the visible page.
+const SESS_PAGE_SIZE = 50;
+const SESS_API_LIMIT = 5000; // server-side cap of /api/sessions
+let sessPage = 0, sessQuery = '';
 function renderSessTable() {
   const col = SESS_COLS.find(c => c.key === sort.key) || SESS_COLS[5];
-  const rows = [...sessions].sort((a, b) => {
+  const all = [...sessions].sort((a, b) => {
     const x = col.val(a), y = col.val(b);
     return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y))) * sort.dir;
   });
+  const pages = Math.max(1, Math.ceil(all.length / SESS_PAGE_SIZE));
+  sessPage = Math.min(Math.max(0, sessPage), pages - 1);
+  const from = sessPage * SESS_PAGE_SIZE;
+  const rows = all.slice(from, from + SESS_PAGE_SIZE);
   const sel = urlState().session;
-  $('sessCount').textContent = rows.length + ' session';
+  $('sessCount').textContent = (all.length >= SESS_API_LIMIT ? 'first ' : '') + plural(all.length, 'session');
+  const pager = $('sessPager');
+  pager.hidden = pages < 2;
+  pager.innerHTML = pages < 2 ? '' :
+    `<button type="button" data-p="prev"${sessPage === 0 ? ' disabled' : ''}>‹ Prev</button>` +
+    `<span class="pos">${esc(num(from + 1))}–${esc(num(from + rows.length))} of ${esc(num(all.length))} · page ${esc(sessPage + 1)} / ${esc(pages)}</span>` +
+    `<button type="button" data-p="next"${sessPage >= pages - 1 ? ' disabled' : ''}>Next ›</button>`;
   $('tSess').innerHTML = '<thead><tr>' + SESS_COLS.map(c =>
     `<th data-k="${esc(c.key)}" class="${c.l ? 'l ' : ''}${c.key === sort.key ? 'sorted' : ''}">${esc(c.label)}${c.key === sort.key ? (sort.dir < 0 ? ' ▾' : ' ▴') : ''}</th>`).join('') +
     '</tr></thead><tbody>' + (rows.length ? rows.map(s =>
@@ -473,7 +487,9 @@ async function renderTimeline() {
 }
 
 async function renderSessions() {
-  sessions = await getJson('/api/sessions?' + apiQuery({limit: 200}));
+  const q = apiQuery();
+  if (q !== sessQuery) { sessQuery = q; sessPage = 0; } // new filters start on page 1; a timed refresh keeps the page
+  sessions = await getJson('/api/sessions?' + apiQuery({limit: SESS_API_LIMIT}));
   renderSessTable();
   await renderTimeline();
 }
@@ -684,6 +700,7 @@ function init() {
     if (th) {
       const k = th.dataset.k;
       sort = sort.key === k ? {key: k, dir: -sort.dir} : {key: k, dir: ['project', 'vendor', 'model'].includes(k) ? 1 : -1};
+      sessPage = 0;
       renderSessTable();
       return;
     }
@@ -692,6 +709,12 @@ function init() {
     setState({session: tr.dataset.s});
     renderSessTable();
     renderTimeline().catch(e => { $('status').textContent = 'Failed to load data: ' + e.message; });
+  });
+  $('sessPager').addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-p]');
+    if (!b || b.disabled) return;
+    sessPage += b.dataset.p === 'next' ? 1 : -1;
+    renderSessTable();
   });
   onCardActivate($('limCards'), selectLimit);
   // overview mini cards open the limits tab with that card's chart

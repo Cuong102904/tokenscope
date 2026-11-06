@@ -66,6 +66,8 @@
   th:first-child, td:first-child { text-align:left; }
   td.l, th.l { text-align:left; }
   th { color:var(--mute); font-weight:500; }
+  .pager { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; padding:0 14px 12px; font-size:13px; color:var(--mute); }
+  .pager .pos { font-variant-numeric:tabular-nums; }
   #tSess th { cursor:pointer; }
   #tSess th.sorted { color:var(--ink); }
   #tSess tbody tr { cursor:pointer; }
@@ -154,7 +156,8 @@
 
     <div data-pane="sessions" hidden>
       <section class="card" data-sec="sess-table"><h2>Sessions <span class="t" id="sessCount"></span></h2>
-        <div class="body scroll"><table id="tSess"></table></div></section>
+        <div class="body scroll"><table id="tSess"></table></div>
+        <div class="pager" id="sessPager" hidden></div></section>
       <section class="card" data-sec="sess-timeline"><h2>Cumulative cost <span class="t" id="tlTitle">click a row in the table above</span></h2>
         <div class="body"><p id="tlNote" class="note warn" hidden></p>
           <div class="chart short"><canvas id="cTimeline" role="img" aria-label="Cumulative cost of the session"></canvas></div></div></section>
