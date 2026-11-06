@@ -16,7 +16,7 @@ const ETA_MIN_SPAN_SECS: i64 = 600;
 
 pub const EXPIRED_NOTE: &str = "đã reset, chờ số mới";
 pub const NO_DATA_NOTE: &str =
-    "Chưa có dữ liệu hạn mức — chạy `agent-usage statusline --print-snippet`";
+    "Chưa có dữ liệu hạn mức — chạy `tokenscope statusline --print-snippet`";
 pub const UNKNOWN_ACCOUNT_LABEL: &str = "log cũ không phân biệt tài khoản";
 const STALE_ETA_NOTE: &str = "số đo đã cũ, không tính ETA";
 const MIXED_REASON: &str = "số liệu lẫn tài khoản hoặc nhiễu";

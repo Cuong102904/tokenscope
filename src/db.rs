@@ -35,7 +35,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
     if !(version == 1 || (version == 0 && tables == 0)) {
-        anyhow::bail!("not an agent-usage database: {}", path.display());
+        anyhow::bail!("not an tokenscope database: {}", path.display());
     }
     conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))?;
     // schema and version in one transaction: no tables-with-version-0 state

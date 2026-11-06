@@ -1,18 +1,18 @@
-use agent_usage::adapters::agy;
-use agent_usage::collect::{self, AdapterStatus};
-use agent_usage::config::Config;
-use agent_usage::db;
-use agent_usage::model::Vendor;
-use agent_usage::paths::Paths;
-use agent_usage::pricing::PriceTable;
-use agent_usage::query::{Filter, active, cost};
-use agent_usage::{server, statusline};
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
+use tokenscope::adapters::agy;
+use tokenscope::collect::{self, AdapterStatus};
+use tokenscope::config::Config;
+use tokenscope::db;
+use tokenscope::model::Vendor;
+use tokenscope::paths::Paths;
+use tokenscope::pricing::PriceTable;
+use tokenscope::query::{Filter, active, cost};
+use tokenscope::{server, statusline};
 
 #[derive(Parser)]
 #[command(
-    name = "agent-usage",
+    name = "tokenscope",
     version,
     about = "Estimated cost and rate limits for local coding agents"
 )]
@@ -53,7 +53,7 @@ enum Cmd {
         /// Append `5h 44% · tuần 54% · $12.00 hôm nay` on its own line
         #[arg(long)]
         show: bool,
-        /// Account name for the snapshot (default: $AGENT_USAGE_ACCOUNT, then config)
+        /// Account name for the snapshot (default: $TOKENSCOPE_ACCOUNT, then config)
         #[arg(long)]
         account: Option<String>,
         /// Print the settings.json snippet to paste (never writes settings.json)
@@ -152,10 +152,23 @@ fn main() -> anyhow::Result<()> {
             account,
             print_snippet,
         };
-        statusline::run(&args, Paths::from_env().ok().as_ref());
+        let paths = Paths::from_env().ok();
+        if let Some(p) = &paths {
+            // silent: the status line's stdout/stderr belong to Claude Code
+            let _ = p.migrate_legacy();
+        }
+        statusline::run(&args, paths.as_ref());
         return Ok(());
     }
     let paths = Paths::from_env()?;
+    match paths.migrate_legacy() {
+        Ok(true) => eprintln!(
+            "moved ~/.agent-usage to {} (renamed in tokenscope 0.1)",
+            paths.data_dir().display()
+        ),
+        Ok(false) => {}
+        Err(e) => eprintln!("warning: could not move ~/.agent-usage to ~/.tokenscope: {e}"),
+    }
     match cli.cmd {
         Cmd::Collect {
             watch: true,
@@ -302,7 +315,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Serve { port } => server::serve(paths, port)?,
-        Cmd::Tui => agent_usage::tui::run(paths)?,
+        Cmd::Tui => tokenscope::tui::run(paths)?,
         Cmd::Statusline { .. } => unreachable!("handled above"),
     }
     Ok(())

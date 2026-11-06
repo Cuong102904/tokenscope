@@ -1,8 +1,3 @@
-use agent_usage::adapters::{claude::ClaudeAdapter, codex::CodexAdapter};
-use agent_usage::config::Config;
-use agent_usage::query::active;
-use agent_usage::server::{self, AppState};
-use agent_usage::{collect, db, paths::Paths, pricing::PriceTable};
 use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
@@ -10,6 +5,11 @@ use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
+use tokenscope::adapters::{claude::ClaudeAdapter, codex::CodexAdapter};
+use tokenscope::config::Config;
+use tokenscope::query::active;
+use tokenscope::server::{self, AppState};
+use tokenscope::{collect, db, paths::Paths, pricing::PriceTable};
 use tower::ServiceExt;
 
 const NOW: i64 = 1_800_000_000;
@@ -138,7 +138,7 @@ fn active_minutes_comes_from_config() {
 #[test]
 fn older_write_never_lowers_last_write() {
     let (_d, mut c, _pr, _p) = setup();
-    use agent_usage::model::{Batch, SessionInfo, Vendor};
+    use tokenscope::model::{Batch, SessionInfo, Vendor};
     let mk = |lw| SessionInfo {
         vendor: Vendor::Claude,
         session_id: "s".into(),

@@ -4,8 +4,8 @@ use crate::paths::Paths;
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Ingests the rate-limit snapshots `agent-usage statusline` drops into
-/// `~/.agent-usage/snapshots/claude-*.json`, then deletes those files.
+/// Ingests the rate-limit snapshots `tokenscope statusline` drops into
+/// `~/.tokenscope/snapshots/claude-*.json`, then deletes those files.
 pub struct ClaudeSnapshotsAdapter;
 
 fn files(paths: &Paths) -> Vec<PathBuf> {

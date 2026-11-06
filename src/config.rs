@@ -4,7 +4,7 @@ use anyhow::Context;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-/// `~/.agent-usage/config.toml`. A missing file gives the defaults; a parse
+/// `~/.tokenscope/config.toml`. A missing file gives the defaults; a parse
 /// error is an error.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]

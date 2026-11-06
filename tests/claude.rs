@@ -1,10 +1,10 @@
-use agent_usage::adapters::{
+use serde_json::json;
+use std::path::Path;
+use tokenscope::adapters::{
     Adapter, CollectCtx,
     claude::{ClaudeAdapter, parse_line},
 };
-use agent_usage::{config::Config, db, model::Batch, paths::Paths, scan};
-use serde_json::json;
-use std::path::Path;
+use tokenscope::{config::Config, db, model::Batch, paths::Paths, scan};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();

@@ -1,6 +1,6 @@
-use agent_usage::{db, scan};
 use std::io::Write;
 use std::path::Path;
+use tokenscope::{db, scan};
 
 fn conn(dir: &Path) -> rusqlite::Connection {
     db::open(&dir.join("t.db")).unwrap()

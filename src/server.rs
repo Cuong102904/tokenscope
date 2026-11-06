@@ -1,4 +1,4 @@
-//! `agent-usage serve`: read-only JSON API + the embedded single-page dashboard,
+//! `tokenscope serve`: read-only JSON API + the embedded single-page dashboard,
 //! bound to 127.0.0.1 only. A background thread re-collects every
 //! `refresh_seconds`; every request opens its own read-only connection (WAL).
 
@@ -273,7 +273,7 @@ async fn meta(State(st): State<AppState>) -> ApiResult {
 const LIMIT_EVENT_DAYS: i64 = 30;
 /// `refresh=agy` runs a process and writes the DB, so it needs this header:
 /// a cross-site `<img>`/form cannot set it, and without CORS a script cannot either.
-const REFRESH_HEADER: &str = "x-agent-usage";
+const REFRESH_HEADER: &str = "x-tokenscope";
 
 #[derive(Debug, Default, Deserialize)]
 struct LimitsParams {
@@ -406,7 +406,7 @@ pub fn serve(paths: Paths, port: u16) -> anyhow::Result<()> {
         .build()?;
     rt.block_on(async move {
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        println!("agent-usage: http://{addr}");
+        println!("tokenscope: http://{addr}");
         axum::serve(listener, router(state)).await?;
         anyhow::Ok(())
     })

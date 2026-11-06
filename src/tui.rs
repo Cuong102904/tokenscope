@@ -1,4 +1,4 @@
-//! `agent-usage tui`: one screen with cost totals, one gauge per rate-limit
+//! `tokenscope tui`: one screen with cost totals, one gauge per rate-limit
 //! card and the active sessions. Split in three: [`build_state`] (DB -> plain
 //! data, injectable `now`), [`render`] (pure drawing, testable with
 //! `TestBackend`) and [`run`] (terminal + event loop + background collector).
@@ -280,7 +280,7 @@ pub enum Msg {
     Died(String),
 }
 
-const WORKER_NAME: &str = "agent-usage-collector";
+const WORKER_NAME: &str = "tokenscope-collector";
 
 /// The panic hook restores the terminal and prints only for panics outside the collector thread.
 pub fn is_worker_thread(name: Option<&str>) -> bool {

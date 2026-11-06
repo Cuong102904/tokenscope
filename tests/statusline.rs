@@ -1,16 +1,16 @@
-use agent_usage::adapters::{Adapter, claude_snapshots::ClaudeSnapshotsAdapter};
-use agent_usage::collect::run_all;
-use agent_usage::{config::Config, db, paths::Paths};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use tokenscope::adapters::{Adapter, claude_snapshots::ClaudeSnapshotsAdapter};
+use tokenscope::collect::run_all;
+use tokenscope::{config::Config, db, paths::Paths};
 
 const STDIN: &str = r#"{"rate_limits":{"five_hour":{"used_percentage":44,"resets_at":1792996200},"seven_day":{"used_percentage":54,"resets_at":1793500000}}}"#;
 
 fn run(home: &Path, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> (bool, String, Duration) {
     let t = Instant::now();
-    let mut c = Command::new(env!("CARGO_BIN_EXE_agent-usage"));
+    let mut c = Command::new(env!("CARGO_BIN_EXE_tokenscope"));
     c.args(args)
         .env("HOME", home)
         .stdin(Stdio::piped())
@@ -33,7 +33,7 @@ fn run(home: &Path, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> (bool, 
 }
 
 fn snaps(home: &Path) -> Vec<std::path::PathBuf> {
-    match std::fs::read_dir(home.join(".agent-usage/snapshots")) {
+    match std::fs::read_dir(home.join(".tokenscope/snapshots")) {
         Ok(rd) => rd.map(|e| e.unwrap().path()).collect(),
         Err(_) => vec![],
     }
@@ -62,7 +62,7 @@ fn account_flag_beats_env() {
         h.path(),
         &["statusline", "--account", "flag"],
         STDIN,
-        &[("AGENT_USAGE_ACCOUNT", "env")],
+        &[("TOKENSCOPE_ACCOUNT", "env")],
     );
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&snaps(h.path())[0]).unwrap()).unwrap();
@@ -72,7 +72,7 @@ fn account_flag_beats_env() {
         h.path(),
         &["statusline"],
         STDIN,
-        &[("AGENT_USAGE_ACCOUNT", "env")],
+        &[("TOKENSCOPE_ACCOUNT", "env")],
     );
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&snaps(h.path())[0]).unwrap()).unwrap();
@@ -113,8 +113,8 @@ fn child_ignoring_large_stdin_does_not_deadlock() {
 #[test]
 fn unwritable_snapshot_dir_still_prints() {
     let h = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(h.path().join(".agent-usage")).unwrap();
-    std::fs::write(h.path().join(".agent-usage/snapshots"), "not a dir").unwrap();
+    std::fs::create_dir_all(h.path().join(".tokenscope")).unwrap();
+    std::fs::write(h.path().join(".tokenscope/snapshots"), "not a dir").unwrap();
     let (ok, out, _) = run(h.path(), &["statusline", "--wrap", "echo OLD"], STDIN, &[]);
     assert!(ok);
     assert_eq!(out, "OLD\n");
@@ -133,12 +133,8 @@ fn missing_rate_limits_writes_nothing() {
 }
 
 fn write_today(home: &Path, date: &str) {
-    std::fs::create_dir_all(home.join(".agent-usage")).unwrap();
-    std::fs::write(
-        home.join(".agent-usage/today.txt"),
-        format!("{date} $12.00"),
-    )
-    .unwrap();
+    std::fs::create_dir_all(home.join(".tokenscope")).unwrap();
+    std::fs::write(home.join(".tokenscope/today.txt"), format!("{date} $12.00")).unwrap();
 }
 
 #[test]
@@ -240,10 +236,10 @@ fn snapshots_ingested_and_removed() {
 
 #[test]
 fn default_adapters_include_snapshots() {
-    let ads = agent_usage::collect::default_adapters();
+    let ads = tokenscope::collect::default_adapters();
     assert!(
         ads.iter()
-            .any(|a| a.vendor() == agent_usage::model::Vendor::Claude && a.is_auxiliary())
+            .any(|a| a.vendor() == tokenscope::model::Vendor::Claude && a.is_auxiliary())
     );
 }
 
@@ -260,7 +256,7 @@ fn print_snippet_copies_command_verbatim() {
     let (ok, out, _) = run(h.path(), &["statusline", "--print-snippet"], "", &[]);
     assert!(ok);
     assert_eq!(std::fs::read(&sp).unwrap(), before);
-    let sh = h.path().join(".agent-usage/wrapped-statusline.sh");
+    let sh = h.path().join(".tokenscope/wrapped-statusline.sh");
     assert_eq!(std::fs::read_to_string(&sh).unwrap(), cmd);
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
@@ -273,7 +269,7 @@ fn print_snippet_copies_command_verbatim() {
     assert_eq!(snip["statusLine"]["type"], "command");
     assert_eq!(
         snip["statusLine"]["command"],
-        "agent-usage statusline --wrap-file ~/.agent-usage/wrapped-statusline.sh --show"
+        "tokenscope statusline --wrap-file ~/.tokenscope/wrapped-statusline.sh --show"
     );
     // running the wrapper reproduces the original command's output
     let mut direct = Command::new("sh")
@@ -310,9 +306,9 @@ fn print_snippet_without_existing_command() {
     let h = tempfile::tempdir().unwrap();
     let (ok, out, _) = run(h.path(), &["statusline", "--print-snippet"], "", &[]);
     assert!(ok);
-    assert!(out.contains("agent-usage statusline --show"), "{out}");
+    assert!(out.contains("tokenscope statusline --show"), "{out}");
     assert!(!out.contains("--wrap"), "{out}");
-    assert!(!h.path().join(".agent-usage/wrapped-statusline.sh").exists());
+    assert!(!h.path().join(".tokenscope/wrapped-statusline.sh").exists());
 }
 
 #[test]
@@ -322,7 +318,7 @@ fn same_minute_runs_overwrite_one_file() {
     let b = r#"{"rate_limits":{"five_hour":{"used_percentage":20,"resets_at":1}}}"#;
     // retry if the two runs straddle a minute boundary
     for _ in 0..3 {
-        let _ = std::fs::remove_dir_all(h.path().join(".agent-usage/snapshots"));
+        let _ = std::fs::remove_dir_all(h.path().join(".tokenscope/snapshots"));
         run(h.path(), &["statusline"], a, &[]);
         run(h.path(), &["statusline"], b, &[]);
         let s = snaps(h.path());
@@ -347,7 +343,7 @@ fn bad_args_still_exit_zero() {
 #[test]
 fn corrupt_snapshot_counted_once_then_removed() {
     let h = tempfile::tempdir().unwrap();
-    let d = h.path().join(".agent-usage/snapshots");
+    let d = h.path().join(".tokenscope/snapshots");
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("claude-bad-1.json"), "{nope").unwrap();
     std::fs::write(
@@ -375,11 +371,11 @@ fn print_snippet_does_not_read_settings_symlinked_to_credentials() {
     let cred = dir.join(".credentials.json");
     std::fs::write(&cred, r#"{"statusLine":{"command":"echo SECRET"}}"#).unwrap();
     std::os::unix::fs::symlink(&cred, dir.join("settings.json")).unwrap();
-    let out = agent_usage::statusline::print_snippet(&Paths {
+    let out = tokenscope::statusline::print_snippet(&Paths {
         home: h.path().to_path_buf(),
     });
     assert!(!out.contains("--wrap-file"), "{out}");
-    assert!(!h.path().join(".agent-usage/wrapped-statusline.sh").exists());
+    assert!(!h.path().join(".tokenscope/wrapped-statusline.sh").exists());
 }
 
 #[test]
