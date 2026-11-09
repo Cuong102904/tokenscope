@@ -94,6 +94,9 @@ in `tests/fixtures/<vendor>/`; never commit real log lines (they carry project n
 - A reading is stale after 30 minutes for windows up to 5 hours, otherwise after 6 hours.
   A window whose reset has passed is `expired`: its number is shown muted as "before the reset",
   never as current.
+- Account names: `config.toml` `[labels]` wins, else the name set from the dashboard (kv rows
+  `label:<vendor>:<account>`, `POST /api/account-label`, needs the `X-Tokenscope` header), else
+  `vendor:account`. `LimitCard.current` marks the account with the newest reading of its vendor.
 - On-demand refreshes are throttled to once per 5 minutes per tool (stamped before running).
   The dashboard refreshes Claude and Codex readings by itself when stale or expired, each reading
   once; agy only by its button, because its `/usage` may use quota.

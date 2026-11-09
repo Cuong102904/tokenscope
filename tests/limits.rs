@@ -711,3 +711,161 @@ fn accounts_without_a_reading_for_30_days_are_hidden() {
         ["b6e929bc:monthly", "f8ce04de:five_hour", "f8ce04de:weekly"]
     );
 }
+
+#[test]
+fn stored_label_names_the_account_and_config_wins() {
+    let (_d, c) = setup();
+    snap(
+        &c,
+        "codex",
+        "aaaa1111",
+        "five_hour",
+        300,
+        10.0,
+        NOW + HOUR,
+        NOW - MIN,
+    );
+    snap(
+        &c,
+        "codex",
+        "bbbb2222",
+        "five_hour",
+        300,
+        20.0,
+        NOW + HOUR,
+        NOW - MIN,
+    );
+    snap(
+        &c,
+        "agy",
+        "cccc3333",
+        "weekly",
+        10080,
+        30.0,
+        NOW + DAY,
+        NOW - MIN,
+    );
+    limits::set_label(&c, "codex", "aaaa1111", "  Work  ").unwrap();
+    limits::set_label(&c, "codex", "bbbb2222", "From db").unwrap();
+    limits::set_label(&c, "agy", "cccc3333", "Gemini").unwrap();
+    let mut cfg = Config::default();
+    cfg.account_labels
+        .insert("codex:bbbb2222".into(), "From config".into());
+    let cards = limits::current(&c, &cfg, NOW).unwrap();
+    let a = card(&cards, "codex", "aaaa1111", "five_hour");
+    assert_eq!((a.account_label.as_str(), a.label_editable), ("Work", true));
+    let b = card(&cards, "codex", "bbbb2222", "five_hour");
+    assert_eq!(
+        (b.account_label.as_str(), b.label_editable),
+        ("From config", false),
+        "config.toml wins and is not editable from the dashboard"
+    );
+    assert_eq!(
+        card(&cards, "agy", "cccc3333", "weekly").account_label,
+        "Gemini"
+    );
+    // limit events use the same names
+    c.execute(
+        "INSERT INTO limit_events(vendor,account,ts,scope,resets_at) VALUES('codex','aaaa1111',?1,'five_hour',?2)",
+        params![NOW - 5, NOW + HOUR],
+    )
+    .unwrap();
+    let ev = limits::events(&c, &cfg, NOW - DAY).unwrap();
+    assert_eq!(ev[0].account_label, "Work");
+}
+
+#[test]
+fn set_label_validates_and_empty_removes() {
+    let (_d, c) = setup();
+    for bad in [
+        ("nope", "a1", "x"),
+        ("codex", "", "x"),
+        ("codex", "bad id!", "x"),
+        ("codex", "a1", "line\nbreak"),
+    ] {
+        assert!(
+            limits::set_label(&c, bad.0, bad.1, bad.2).is_err(),
+            "{bad:?}"
+        );
+    }
+    assert!(limits::set_label(&c, "codex", "a1", &"x".repeat(61)).is_err());
+    limits::set_label(&c, "codex", "a1", &"é".repeat(60)).unwrap(); // 60 characters
+    limits::set_label(&c, "codex", "a1", "   ").unwrap();
+    let n: i64 = c
+        .query_row(
+            "SELECT count(*) FROM kv WHERE key LIKE 'label:%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0, "a blank label removes the stored name");
+    snap(
+        &c,
+        "codex",
+        "a1",
+        "five_hour",
+        300,
+        1.0,
+        NOW + HOUR,
+        NOW - MIN,
+    );
+    let cards = limits::current(&c, &Config::default(), NOW).unwrap();
+    assert_eq!(
+        card(&cards, "codex", "a1", "five_hour").account_label,
+        "codex:a1"
+    );
+}
+
+#[test]
+fn newest_reading_of_each_vendor_is_the_current_account() {
+    let (_d, c) = setup();
+    snap(
+        &c,
+        "codex",
+        "aaaa1111",
+        "five_hour",
+        300,
+        10.0,
+        NOW + HOUR,
+        NOW - 100,
+    );
+    snap(
+        &c,
+        "codex",
+        "aaaa1111",
+        "weekly",
+        10080,
+        10.0,
+        NOW + DAY,
+        NOW - 100,
+    );
+    snap(
+        &c,
+        "codex",
+        "bbbb2222",
+        "five_hour",
+        300,
+        20.0,
+        NOW + HOUR,
+        NOW - 10,
+    );
+    snap(
+        &c,
+        "agy",
+        "cccc3333",
+        "weekly",
+        10080,
+        30.0,
+        NOW + DAY,
+        NOW - MIN,
+    );
+    let cards = limits::current(&c, &Config::default(), NOW).unwrap();
+    let cur = |v: &str, a: &str, s: &str| card(&cards, v, a, s).current;
+    assert!(cur("codex", "bbbb2222", "five_hour"));
+    assert!(!cur("codex", "aaaa1111", "five_hour") && !cur("codex", "aaaa1111", "weekly"));
+    assert!(cur("agy", "cccc3333", "weekly"));
+    assert!(
+        cards.iter().filter(|x| x.no_data).all(|x| !x.current),
+        "the placeholder is never current"
+    );
+}

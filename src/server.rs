@@ -13,7 +13,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -61,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/meta", get(meta))
         .route("/api/limits", get(limits_api))
         .route("/api/limits/history", get(limits_history_api))
+        .route("/api/account-label", post(account_label_api))
         .layer(middleware::from_fn_with_state(state.clone(), host_guard))
         .with_state(state)
 }
@@ -378,6 +379,44 @@ async fn limits_api(
     })
     .await;
     res.into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct LabelBody {
+    vendor: String,
+    account: String,
+    label: String,
+}
+
+/// Name an account from the dashboard (`{vendor, account, label}`; a blank label removes the
+/// name). Writes the DB, so like `?refresh=` it needs the same-origin header.
+async fn account_label_api(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Result<Json<LabelBody>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    if !headers.contains_key(REFRESH_HEADER) {
+        return (
+            StatusCode::FORBIDDEN,
+            format!("naming an account needs the {REFRESH_HEADER} header"),
+        )
+            .into_response();
+    }
+    let Ok(Json(b)) = body else {
+        return ApiError::BadRequest("expected {vendor, account, label} as JSON".into())
+            .into_response();
+    };
+    let out = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let conn = db::open(&st.paths.db())?;
+        limits::set_label(&conn, &b.vendor, &b.account, &b.label)
+    })
+    .await;
+    match out {
+        Ok(Ok(())) => Json(serde_json::json!({"ok": true})).into_response(),
+        // set_label only fails on bad input or a database error; bad input is the usual case
+        Ok(Err(e)) => ApiError::BadRequest(format!("{e:#}")).into_response(),
+        Err(e) => ApiError::Internal(anyhow::anyhow!("worker: {e}")).into_response(),
+    }
 }
 
 type RefreshFn = fn(
