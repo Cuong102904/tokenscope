@@ -64,7 +64,9 @@ in `tests/fixtures/<vendor>/`; never commit real log lines (they carry project n
 
 **Safety and privacy**
 - Never open credential files (`auth.json`, anything with `credential`/`token` in the name,
-  OAuth JSON). Go through `safety::check_path` / `scan` helpers; tests assert this.
+  OAuth JSON, `*.key`). Go through `safety::check_path` / `scan` helpers; tests assert this.
+  Looking at their metadata is fine: `codex_usage::follow_switch` stats `~/.codex/auth.json`
+  to notice an account switch.
 - Account identifiers are stored only as `sha8` (first 8 hex of SHA-256). Never store emails
   or raw account ids. Codex's `creator_account_id` and app-server `accountId` hash the same way.
 - The tool never edits `~/.claude/settings.json`; `statusline --print-snippet` only prints.
@@ -96,7 +98,8 @@ in `tests/fixtures/<vendor>/`; never commit real log lines (they carry project n
   never as current.
 - On-demand refreshes are throttled to once per 5 minutes per tool (stamped before running).
   The dashboard refreshes Claude and Codex readings by itself when stale or expired, each reading
-  once; agy only by its button, because its `/usage` may use quota.
+  once; agy only by its button, because its `/usage` may use quota. The collector also asks
+  Codex right after its login file changes (an account switch), at most once a minute.
 
 **Dashboard**
 - Charts are updated in place (`draw` in `app.js`) and never animate; re-creating them on refresh
