@@ -131,6 +131,8 @@ Claude Code keeps its 5-hour and weekly usage on Anthropic's side; no local log 
 - **On demand:** the **Refresh Claude** button on the Limits tab (or `tokenscope status --refresh`) runs `claude -p --no-session-persistence "/usage"` and reads the 5-hour, weekly and per-model weekly numbers it prints. It runs at most once every 5 minutes, takes a few seconds and doesn't count as a Claude session.
 - **Continuously (optional):** Claude Code also passes the same numbers to the status line command on every message. With the status line hook you get a reading per message, which is enough for the projected time-to-limit.
 
+**Which account.** The Refresh button also runs `claude auth status --json` (email, organisation and plan; no token) and files the readings under that account, named by its email in your local database (nothing leaves your machine). Switch Claude accounts and the new one gets its own row. If you set `claude_account` in `config.toml`, that name is used instead and the lookup is skipped.
+
 The `/usage` output is text meant for people. If a Claude Code update changes its wording, the refresh reports an error instead of showing wrong numbers.
 
 To add the status line hook:

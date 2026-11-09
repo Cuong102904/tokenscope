@@ -61,6 +61,9 @@ impl Adapter for ClaudeSnapshotsAdapter {
 
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
         let mut batch = Batch::default();
+        // the status line cannot ask who is signed in; /usage did, so default-keyed snapshots
+        // belong to that account
+        let identified = super::claude_usage::identity_key(ctx.conn);
         for p in files(ctx.paths) {
             // a forbidden link target counts as unreadable; removing the link never touches it
             let parsed = crate::safety::read_to_string_guarded(&p)
@@ -73,6 +76,10 @@ impl Adapter for ClaudeSnapshotsAdapter {
                 continue;
             };
             let account = v["account"].as_str().unwrap_or(&ctx.config.claude_account);
+            let account = match &identified {
+                Some(key) if account == super::claude_usage::DEFAULT_ACCOUNT => key.as_str(),
+                _ => account,
+            };
             let Some(at) = v["measured_at"].as_i64() else {
                 ctx.unreadable += 1;
                 ctx.remove_after_write.push(p);
