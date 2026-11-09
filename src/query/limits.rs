@@ -31,6 +31,11 @@ pub struct LimitCard {
     /// Raw account key (sha8 or ""), needed to ask for the history.
     pub account: String,
     pub account_label: String,
+    /// The name can be changed from the dashboard (it does not come from `config.toml`).
+    pub label_editable: bool,
+    /// This account has the newest reading of its vendor: the one that is logged in, when
+    /// only one account at a time can be (Codex, Claude Code).
+    pub current: bool,
     pub scope: String,
     pub window_minutes: Option<i64>,
     /// Of the newest measurement. Not current when `expired` (the window has reset since).
@@ -75,13 +80,79 @@ pub fn stale_after_secs(window_minutes: Option<i64>) -> i64 {
     }
 }
 
-pub fn account_label(cfg: &Config, vendor: &str, account: &str) -> String {
-    match Vendor::parse(vendor) {
+/// Longest account name, in characters.
+pub const MAX_LABEL_CHARS: usize = 60;
+const LABEL_PREFIX: &str = "label:";
+
+/// Names set from the dashboard, keyed `<vendor>:<account>` (kv rows `label:<vendor>:<account>`).
+pub fn stored_labels(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
+    let mut st = conn.prepare("SELECT key, value FROM kv WHERE key LIKE 'label:%'")?;
+    let rows = st
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.strip_prefix(LABEL_PREFIX)?.to_string(), v)))
+        .collect())
+}
+
+/// Name an account from the dashboard. The name is trimmed; a blank one removes it. Accounts
+/// named in `config.toml` keep that name.
+pub fn set_label(
+    conn: &Connection,
+    vendor: &str,
+    account: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(Vendor::parse(vendor).is_some(), "unknown vendor: {vendor}");
+    anyhow::ensure!(
+        !account.is_empty()
+            && account.len() <= 64
+            && account
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')),
+        "bad account key"
+    );
+    let label = label.trim();
+    anyhow::ensure!(
+        label.chars().count() <= MAX_LABEL_CHARS && !label.chars().any(char::is_control),
+        "a name is at most {MAX_LABEL_CHARS} characters, on one line"
+    );
+    let key = format!("{LABEL_PREFIX}{vendor}:{account}");
+    if label.is_empty() {
+        conn.execute("DELETE FROM kv WHERE key = ?1", [key])?;
+    } else {
+        conn.execute(
+            "INSERT OR REPLACE INTO kv(key, value) VALUES(?1, ?2)",
+            [key, label.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
+/// Name shown for an account: `config.toml`, else the dashboard name, else `vendor:account`.
+/// The flag says whether the dashboard may rename it.
+pub fn account_label(
+    cfg: &Config,
+    stored: &HashMap<String, String>,
+    vendor: &str,
+    account: &str,
+) -> (String, bool) {
+    let key = format!("{vendor}:{account}");
+    if cfg.account_labels.contains_key(&key) {
+        let v = Vendor::parse(vendor).unwrap_or(Vendor::Claude);
+        return (cfg.label(v, account), false);
+    }
+    if let Some(l) = stored.get(&key) {
+        return (l.clone(), true);
+    }
+    let label = match Vendor::parse(vendor) {
         Some(Vendor::Codex) if account.is_empty() => UNKNOWN_ACCOUNT_LABEL.to_string(),
         Some(v) => cfg.label(v, account),
         None if account.is_empty() => vendor.to_string(),
-        None => format!("{vendor}:{account}"),
-    }
+        None => key,
+    };
+    (label, !account.is_empty())
 }
 
 fn vendor_rank(v: &str) -> usize {
@@ -105,6 +176,8 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
             vendor: r.get(0)?,
             account: r.get(1)?,
             account_label: String::new(),
+            label_editable: true,
+            current: false,
             scope: r.get(2)?,
             window_minutes: r.get(3)?,
             used_percent: r.get(4)?,
@@ -156,10 +229,24 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
         .filter(|c| current_plan(c) && recent(c))
         .cloned()
         .collect();
+    let stored = stored_labels(conn)?;
+    // per vendor, the account of its newest reading
+    let mut latest: HashMap<&str, (i64, &str)> = HashMap::new();
+    for c in &rows {
+        let e = latest.entry(c.vendor.as_str()).or_insert((i64::MIN, ""));
+        if (c.measured_at, c.account.as_str()) > *e {
+            *e = (c.measured_at, c.account.as_str());
+        }
+    }
+    let latest: HashMap<String, String> = latest
+        .into_iter()
+        .map(|(v, (_, a))| (v.to_string(), a.to_string()))
+        .collect();
     let mut cards = vec![];
     for c in rows {
         let mut c = c;
-        c.account_label = account_label(cfg, &c.vendor, &c.account);
+        (c.account_label, c.label_editable) = account_label(cfg, &stored, &c.vendor, &c.account);
+        c.current = !c.account.is_empty() && latest.get(&c.vendor) == Some(&c.account);
         c.stale = now - c.measured_at > stale_after_secs(c.window_minutes);
         c.expired = c.resets_at.is_some_and(|r| r < now);
         if c.expired {
@@ -190,6 +277,8 @@ pub fn current(conn: &Connection, cfg: &Config, now: i64) -> anyhow::Result<Vec<
             vendor: "claude".into(),
             account: String::new(),
             account_label: "claude".into(),
+            label_editable: false,
+            current: false,
             scope: String::new(),
             window_minutes: None,
             used_percent: 0.0,
@@ -343,11 +432,12 @@ pub fn events(conn: &Connection, cfg: &Config, since: i64) -> anyhow::Result<Vec
     let mut st = conn.prepare(
         "SELECT vendor, account, ts, scope, resets_at FROM limit_events WHERE ts >= ?1 ORDER BY ts DESC, vendor, scope",
     )?;
+    let stored = stored_labels(conn)?;
     let v = st
         .query_map([since], |r| {
             let (vendor, account): (String, String) = (r.get(0)?, r.get(1)?);
             Ok(LimitEventRow {
-                account_label: account_label(cfg, &vendor, &account),
+                account_label: account_label(cfg, &stored, &vendor, &account).0,
                 vendor,
                 account,
                 ts: r.get(2)?,

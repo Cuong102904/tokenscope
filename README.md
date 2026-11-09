@@ -124,6 +124,8 @@ The Active tab shows sessions that are open now and those written in the last fe
 
 Limits are shown one row per account, with a status column ("Available", "Limit reached until …", "No current reading"). When a Claude or Codex window resets or its reading goes stale, the dashboard keeps the old number (muted) and asks the tool for a new reading on its own; agy is refreshed only by its button, because its `/usage` may use quota. Windows last seen under an older plan (a monthly window from before a free → Plus upgrade) are dropped.
 
+**Naming accounts.** Accounts show as `codex:f8ce04de` (a short hash). Click the pencil next to a name on the Limits tab to give it a readable one (a work email, "personal", …); a blank name removes it. Names are kept in the local database. With more than one account for a vendor, the one with the newest reading is marked **Current**: that is the account that is logged in. Names set in `[labels]` of `config.toml` take precedence and cannot be changed from the dashboard.
+
 ## Claude Code rate limits
 
 Claude Code keeps its 5-hour and weekly usage on Anthropic's side; no local log has it. tokenscope reads it in two ways, and neither touches your Claude credentials:

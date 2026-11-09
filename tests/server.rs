@@ -534,3 +534,78 @@ async fn api_limits_refresh_codex() {
     let status = v["refresh"]["status"].as_str().unwrap();
     assert!(["throttled", "not_installed"].contains(&status), "{v}");
 }
+
+async fn post_label(st: &AppState, body: &str, header: bool, host: &str) -> (StatusCode, String) {
+    let mut req = Request::post("/api/account-label")
+        .header("host", host)
+        .header("content-type", "application/json");
+    if header {
+        req = req.header("x-tokenscope", "1");
+    }
+    let res = server::router(st.clone())
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+#[tokio::test]
+async fn account_label_can_be_set_from_the_dashboard() {
+    let (_d, st) = setup();
+    let now = seed_limits(&st);
+    let _ = now;
+    let c = db::open(&st.paths.db()).unwrap();
+    c.execute(
+        "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source) VALUES('codex','aaaa1111','five_hour',300,10,NULL,NULL,?1,'t')",
+        [chrono::Utc::now().timestamp()],
+    )
+    .unwrap();
+    drop(c);
+    let body = r#"{"vendor":"codex","account":"aaaa1111","label":"Work"}"#;
+    let h = "127.0.0.1:8765";
+    // same-origin header is required (a cross-site form cannot set it)
+    let (s, _) = post_label(&st, body, false, h).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let (s, _) = post_label(&st, body, true, "evil.example:8765").await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "host guard applies");
+    let (s, b) = post_label(&st, body, true, h).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let v = json(&st, "/api/limits?vendor=codex").await;
+    let c = v["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["account"] == "aaaa1111")
+        .unwrap();
+    assert_eq!(
+        (c["account_label"].as_str(), c["label_editable"].as_bool()),
+        (Some("Work"), Some(true))
+    );
+    for bad in [
+        r#"{"vendor":"nope","account":"a1","label":"x"}"#,
+        r#"{"vendor":"codex","account":"a1","label":"line\nbreak"}"#,
+        "not json",
+    ] {
+        let (s, _) = post_label(&st, bad, true, h).await;
+        assert!(s.is_client_error(), "{bad}: {s}");
+    }
+    // a blank label removes the name again
+    let (s, _) = post_label(
+        &st,
+        r#"{"vendor":"codex","account":"aaaa1111","label":""}"#,
+        true,
+        h,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let v = json(&st, "/api/limits?vendor=codex").await;
+    assert!(
+        v["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["account_label"] == "codex:aaaa1111")
+    );
+}
