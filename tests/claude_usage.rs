@@ -182,3 +182,204 @@ fn refresh_reports_missing_binary_and_unusable_output() {
         "{e}"
     );
 }
+
+fn auth_json(email: &str) -> String {
+    format!(
+        r#"{{"loggedIn":true,"authMethod":"claude.ai","email":"{email}","orgName":"Acme","subscriptionType":"team"}}"#
+    )
+}
+
+#[test]
+fn parses_the_signed_in_identity() {
+    let id = claude_usage::parse_auth_status(&auth_json("me@example.com")).unwrap();
+    assert_eq!(
+        (id.email.as_str(), id.org.as_deref(), id.plan.as_deref()),
+        ("me@example.com", Some("Acme"), Some("team"))
+    );
+    assert_eq!(
+        claude_usage::parse_auth_status(r#"{"loggedIn":false}"#),
+        None
+    );
+    assert_eq!(
+        claude_usage::parse_auth_status(r#"{"loggedIn":true,"authMethod":"api_key"}"#),
+        None,
+        "no email, nothing to name the account by"
+    );
+    assert_eq!(claude_usage::parse_auth_status("not json"), None);
+    assert_eq!(claude_usage::parse_auth_status(&auth_json("  ")), None);
+}
+
+/// A fake `claude`: `auth status` answers `auth` (and counts calls), anything else prints the usage fixture.
+fn identity_claude(dir: &Path, auth: &str) -> std::path::PathBuf {
+    let fx = dir.join("out.txt");
+    std::fs::write(&fx, FIXTURE).unwrap();
+    let au = dir.join("auth.txt");
+    std::fs::write(&au, auth).unwrap();
+    fake_claude(
+        dir,
+        &format!(
+            "case \"$1\" in auth) echo x >> {0}/auth_calls; cat {1};; *) cat {2};; esac",
+            dir.display(),
+            au.display(),
+            fx.display()
+        ),
+    )
+}
+
+fn accounts(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut st = conn
+        .prepare("SELECT DISTINCT account FROM limit_snapshots WHERE vendor='claude' ORDER BY 1")
+        .unwrap();
+    st.query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+}
+
+fn setup_home() -> (tempfile::TempDir, Paths, rusqlite::Connection) {
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let conn = db::open(&paths.db()).unwrap();
+    (h, paths, conn)
+}
+
+#[test]
+fn readings_are_keyed_and_named_by_the_signed_in_account() {
+    use tokenscope::model::sha8;
+    let (h, paths, mut conn) = setup_home();
+    let cfg = Config::default(); // claude_account = "default": not chosen by the user
+    let bin = identity_claude(h.path(), &auth_json("me@example.com"));
+    // readings from before the identity was known belong to the one account that existed
+    conn.execute(
+        "INSERT INTO limit_snapshots(vendor,account,scope,window_minutes,used_percent,resets_at,plan_type,measured_at,source) VALUES('claude','default','weekly',10080,5,NULL,NULL,10,'statusline')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO limit_events(vendor,account,ts,scope,resets_at) VALUES('claude','default',10,'weekly',20)",
+        [],
+    )
+    .unwrap();
+    let t0 = local(2026, 11, 6, 11, 0);
+    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0).unwrap();
+    let key = sha8("me@example.com");
+    assert_eq!(
+        accounts(&conn),
+        std::slice::from_ref(&key),
+        "old default rows moved over"
+    );
+    let ev: String = conn
+        .query_row("SELECT account FROM limit_events", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ev, key);
+    let label: String = conn
+        .query_row(
+            "SELECT value FROM kv WHERE key = ?1",
+            [format!("label:claude:{key}")],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(label, "me@example.com", "named by its email, locally");
+    // a name the user chose (the dashboard stores it in the same kv row) is never overwritten
+    conn.execute(
+        "UPDATE kv SET value = 'Work' WHERE key = ?1",
+        [format!("label:claude:{key}")],
+    )
+    .unwrap();
+    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0 + 400).unwrap();
+    let label: String = conn
+        .query_row(
+            "SELECT value FROM kv WHERE key = ?1",
+            [format!("label:claude:{key}")],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(label, "Work");
+}
+
+#[test]
+fn switching_claude_account_adds_a_row_and_keeps_the_old_one() {
+    use tokenscope::model::sha8;
+    let (h, paths, mut conn) = setup_home();
+    let cfg = Config::default();
+    let bin = identity_claude(h.path(), &auth_json("a@example.com"));
+    let t0 = local(2026, 11, 6, 11, 0);
+    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0).unwrap();
+    std::fs::write(h.path().join("auth.txt"), auth_json("b@example.com")).unwrap();
+    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0 + 400).unwrap();
+    let mut want = vec![sha8("a@example.com"), sha8("b@example.com")];
+    want.sort();
+    assert_eq!(accounts(&conn), want);
+    let name = |email: &str| -> String {
+        conn.query_row(
+            "SELECT value FROM kv WHERE key = ?1",
+            [format!("label:claude:{}", sha8(email))],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        (name("a@example.com"), name("b@example.com")),
+        ("a@example.com".into(), "b@example.com".into())
+    );
+}
+
+#[test]
+fn an_account_chosen_in_config_is_left_alone() {
+    let (h, paths, mut conn) = setup_home();
+    let cfg = Config {
+        claude_account: "work".into(),
+        ..Config::default()
+    };
+    let bin = identity_claude(h.path(), &auth_json("me@example.com"));
+    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
+    assert_eq!(accounts(&conn), ["work"]);
+    assert!(
+        !h.path().join("auth_calls").exists(),
+        "no identity lookup when the user chose the account"
+    );
+}
+
+#[test]
+fn without_an_identity_the_old_key_is_used() {
+    let (h, paths, mut conn) = setup_home();
+    let cfg = Config::default();
+    let bin = identity_claude(h.path(), r#"{"loggedIn":false}"#);
+    assert_eq!(
+        claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap(),
+        RefreshOutcome::Ran
+    );
+    assert_eq!(accounts(&conn), ["default"]);
+    let n: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM kv WHERE key LIKE 'label:%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn statusline_snapshots_follow_the_identified_account() {
+    use tokenscope::adapters::{Adapter, claude_snapshots::ClaudeSnapshotsAdapter};
+    use tokenscope::collect::run_all;
+    use tokenscope::model::sha8;
+    let (h, paths, mut conn) = setup_home();
+    let cfg = Config::default();
+    let bin = identity_claude(h.path(), &auth_json("me@example.com"));
+    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
+    let dir = paths.snapshots_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("claude-x-202611061100.json"),
+        r#"{"account":"default","measured_at":2000,"five_hour":{"used_percent":44,"resets_at":99999},"seven_day":null}"#,
+    )
+    .unwrap();
+    let ads: Vec<Box<dyn Adapter>> = vec![Box::new(ClaudeSnapshotsAdapter)];
+    let st = run_all(&mut conn, &paths, &cfg, &ads);
+    assert!(st[0].error.is_none(), "{:?}", st[0].error);
+    assert_eq!(accounts(&conn), [sha8("me@example.com")]);
+}

@@ -65,8 +65,10 @@ in `tests/fixtures/<vendor>/`; never commit real log lines (they carry project n
 **Safety and privacy**
 - Never open credential files (`auth.json`, anything with `credential`/`token` in the name,
   OAuth JSON). Go through `safety::check_path` / `scan` helpers; tests assert this.
-- Account identifiers are stored only as `sha8` (first 8 hex of SHA-256). Never store emails
-  or raw account ids. Codex's `creator_account_id` and app-server `accountId` hash the same way.
+- Account identifiers are stored only as `sha8` (first 8 hex of SHA-256); never store raw
+  account ids. The one exception, allowed by the owner: the email of the signed-in Claude account
+  (from `claude auth status --json`) is kept in the local database as that account's display
+  name (`label:claude:<sha8>`), never sent anywhere. Codex's `creator_account_id` and app-server `accountId` hash the same way.
 - The tool never edits `~/.claude/settings.json`; `statusline --print-snippet` only prints.
 - The server binds `127.0.0.1` only and rejects other `Host` headers (DNS rebinding).
   Endpoints that run processes (`/api/limits?refresh=…`) also require the `X-Tokenscope` header.

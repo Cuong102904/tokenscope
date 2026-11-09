@@ -13,6 +13,10 @@
 //! Scopes match the status line snapshots (`five_hour`, `weekly`) so both sources
 //! feed the same cards; per-model weeks become `weekly:<model>`. Reset times are read
 //! in the machine's time zone, which is the one Claude prints them in.
+//!
+//! Which account is signed in comes from `claude auth status --json` (email, organisation,
+//! plan; no token). Unless the user chose `claude_account` in `config.toml`, readings are keyed
+//! `sha8(email)` and the account is named by its email in the local database.
 
 pub use super::refresh::RefreshOutcome;
 use super::refresh::{resolve, throttle};
@@ -26,11 +30,109 @@ use std::process::Command;
 use std::time::Duration;
 
 const KV_LAST_REFRESH: &str = "claude:last_refresh";
+const KV_IDENTITY_KEY: &str = "claude:identity_key";
+const KV_IDENTITY_MIGRATED: &str = "claude:identity_migrated";
+const IDENTITY_TIMEOUT: Duration = Duration::from_secs(10);
+/// The `claude_account` of a config that does not set one.
+pub const DEFAULT_ACCOUNT: &str = "default";
+/// Same cap as the dashboard's account names (`limits::MAX_LABEL_CHARS`).
+const MAX_LABEL_CHARS: usize = 60;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const SOURCE: &str = "claude /usage";
 const MONTHS: [&str; 12] = [
     "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 ];
+
+/// The signed-in Claude account, as `claude auth status --json` reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Identity {
+    pub email: String,
+    pub org: Option<String>,
+    pub plan: Option<String>,
+}
+
+/// `None` when nobody is signed in or the output has no email (an API key login).
+pub fn parse_auth_status(text: &str) -> Option<Identity> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    if v["loggedIn"].as_bool() != Some(true) {
+        return None;
+    }
+    let email = v["email"].as_str()?.trim();
+    if email.is_empty() {
+        return None;
+    }
+    let opt = |k: &str| {
+        v[k].as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Some(Identity {
+        email: email.to_string(),
+        org: opt("orgName"),
+        plan: opt("subscriptionType"),
+    })
+}
+
+/// The account key learned by the last [`refresh`], if any.
+pub fn identity_key(conn: &Connection) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT value FROM kv WHERE key = ?1",
+        [KV_IDENTITY_KEY],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+/// Ask Claude who is signed in. Any failure (old Claude, timeout, odd output) is `None`:
+/// readings then keep the configured key.
+fn identify(bin: &Path, dir: &Path) -> Option<Identity> {
+    let mut cmd = Command::new(bin);
+    cmd.args(["auth", "status", "--json"]).current_dir(dir);
+    let out = crate::statusline::run_with_timeout(cmd, b"", IDENTITY_TIMEOUT)?;
+    parse_auth_status(&String::from_utf8_lossy(&out))
+}
+
+/// Remember the identified account: its key, a name (its email, unless the user already named
+/// it), and, the first time ever, move the readings recorded under the default key to it (until
+/// now there was only that one account).
+fn remember_identity(conn: &Connection, id: &Identity) -> anyhow::Result<String> {
+    let key = crate::model::sha8(&id.email);
+    let set = |k: &str, v: &str| {
+        conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)", [k, v])
+    };
+    set(KV_IDENTITY_KEY, &key)?;
+    let label_key = format!("label:claude:{key}");
+    conn.execute(
+        "INSERT OR IGNORE INTO kv(key,value) VALUES(?1,?2)",
+        [
+            label_key,
+            id.email.chars().take(MAX_LABEL_CHARS).collect::<String>(),
+        ],
+    )?;
+    let migrated: Option<String> = {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT value FROM kv WHERE key = ?1",
+            [KV_IDENTITY_MIGRATED],
+            |r| r.get(0),
+        )
+        .optional()?
+    };
+    if migrated.is_none() {
+        for table in ["limit_snapshots", "limit_events"] {
+            conn.execute(
+                &format!("UPDATE OR IGNORE {table} SET account = ?1 WHERE vendor = 'claude' AND account = ?2"),
+                [key.as_str(), DEFAULT_ACCOUNT],
+            )?;
+        }
+        set(KV_IDENTITY_MIGRATED, "1")?;
+    }
+    Ok(key)
+}
 
 /// Parse `claude /usage` output; lines that do not match are dropped.
 pub fn parse_usage(text: &str, measured_at: i64, account: &str) -> Vec<LimitSnapshot> {
@@ -186,7 +288,16 @@ pub fn refresh_with(
         )
     })?;
     let text = String::from_utf8_lossy(&out);
-    let snaps = parse_usage(&text, now, &cfg.claude_account);
+    // the user's own choice of account key wins; otherwise the signed-in account names it
+    let account = if cfg.claude_account == DEFAULT_ACCOUNT {
+        match identify(&bin, &dir) {
+            Some(id) => remember_identity(conn, &id)?,
+            None => cfg.claude_account.clone(),
+        }
+    } else {
+        cfg.claude_account.clone()
+    };
+    let snaps = parse_usage(&text, now, &account);
     if snaps.is_empty() {
         let head: String = text.chars().take(200).collect();
         anyhow::bail!("claude /usage produced no usage lines: {}", head.trim());
