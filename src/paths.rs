@@ -61,6 +61,11 @@ impl Paths {
     pub fn claude_session_registry(&self) -> PathBuf {
         self.home.join(".claude/sessions")
     }
+    /// Codex's login. Never opened (see `safety`); only its metadata is looked at, to notice
+    /// an account switch (`codex_usage::follow_switch`).
+    pub fn codex_login(&self) -> PathBuf {
+        self.home.join(".codex/auth.json")
+    }
     pub fn codex_sessions(&self) -> PathBuf {
         self.home.join(".codex/sessions")
     }

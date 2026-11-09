@@ -1,7 +1,7 @@
 use crate::adapters::{
     Adapter, CollectCtx, agy::AgyAdapter, claude::ClaudeAdapter,
-    claude_snapshots::ClaudeSnapshotsAdapter, codex::CodexAdapter, opencode::OpenCodeAdapter,
-    pi::PiAdapter,
+    claude_snapshots::ClaudeSnapshotsAdapter, codex::CodexAdapter, codex_usage,
+    opencode::OpenCodeAdapter, pi::PiAdapter,
 };
 use crate::config::Config;
 use crate::db;
@@ -13,6 +13,7 @@ use crate::scan;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdapterStatus {
@@ -191,6 +192,8 @@ pub struct Collector {
     /// Per adapter index: did its last run end with an error?
     failing: Vec<bool>,
     log: Vec<String>,
+    /// `codex` used to follow an account switch (`codex_usage::follow_switch`).
+    codex_bin: PathBuf,
 }
 
 impl Collector {
@@ -208,7 +211,14 @@ impl Collector {
             open_failing: false,
             panicking: false,
             log: vec![],
+            codex_bin: PathBuf::from("codex"),
         }
+    }
+
+    /// Use this `codex` binary to follow account switches (tests pass a fake one).
+    pub fn codex_bin(mut self, bin: PathBuf) -> Collector {
+        self.codex_bin = bin;
+        self
     }
 
     /// The open connection (e.g. for `agy::refresh` after a tick), if any.
@@ -260,6 +270,18 @@ impl Collector {
                         (None, true) => self.log.push(format!("{}: ok again", s.vendor.as_str())),
                         _ => {}
                     }
+                }
+                // a failed ask is reported once: the switch is remembered before asking
+                let now = chrono::Utc::now().timestamp();
+                if let Err(e) = codex_usage::follow_switch_with(
+                    &self.paths,
+                    &self.cfg,
+                    conn,
+                    &self.codex_bin,
+                    now,
+                ) {
+                    self.log
+                        .push(format!("codex: limits after an account switch: {e:#}"));
                 }
                 Tick::Collected(statuses)
             }
