@@ -189,3 +189,7 @@ To refresh the README screenshots after a UI change, run `scripts/demo/screensho
 To release: bump `version` in `Cargo.toml`, merge, then push a matching tag (`git tag v0.2.0 && git push customer v0.2.0`). The release workflow tests, builds the static x86_64 and aarch64 binaries and publishes them with checksums to GitHub Releases, where `install.sh` picks them up.
 
 Design notes live in `docs/superpowers/specs/` and the implementation plan in `docs/superpowers/plans/`.
+
+## License
+
+[MIT](LICENSE).
