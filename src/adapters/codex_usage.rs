@@ -5,7 +5,8 @@
 //! structured JSON, and it carries the account id, which is hashed (sha8) exactly
 //! like the `creator_account_id` of the session logs, so these readings land on the
 //! same cards. Only the logged-in account can be asked; other accounts' cards keep
-//! waiting for their logs.
+//! waiting for their logs. When another tool switches the login (codex-multi-auth,
+//! `codex login`), [`follow_switch`] asks for the new account's limits right away.
 
 pub use super::refresh::RefreshOutcome;
 use super::refresh::{resolve, throttle};
@@ -173,10 +174,105 @@ pub fn refresh_with_timeout(
     if let Some(throttled) = throttle(conn, KV_LAST_REFRESH, now)? {
         return Ok(throttled);
     }
+    ask_and_store(paths, conn, &bin, now, timeout)
+}
+
+/// After an account switch, wait at least this long since the last ask before asking again.
+const SWITCH_MIN_GAP_SECS: i64 = 60;
+const KV_LOGIN_SIG: &str = "codex:login_sig";
+
+/// Identity of `~/.codex/auth.json` from its metadata only (modification time, size, inode).
+/// The file holds the login, so it is never opened; `None` when it does not exist.
+pub fn login_signature(path: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    Some(format!(
+        "{}.{}:{}:{}",
+        m.mtime(),
+        m.mtime_nsec(),
+        m.len(),
+        m.ino()
+    ))
+}
+
+/// Follow an account switch made elsewhere (codex-multi-auth, `codex login`): when the Codex
+/// login file changed since the last look, ask `codex app-server` for the limits of the account
+/// now logged in, without waiting for the 5-minute throttle. The first look only remembers the
+/// file. Codex renewing its own token also changes it; that just asks once more. `Some` when
+/// it asked.
+pub fn follow_switch(
+    paths: &Paths,
+    cfg: &Config,
+    conn: &mut Connection,
+) -> anyhow::Result<Option<RefreshOutcome>> {
+    follow_switch_with(
+        paths,
+        cfg,
+        conn,
+        Path::new("codex"),
+        chrono::Utc::now().timestamp(),
+    )
+}
+
+/// `follow_switch` with an injectable binary and clock (for tests).
+pub fn follow_switch_with(
+    paths: &Paths,
+    _cfg: &Config,
+    conn: &mut Connection,
+    bin: &Path,
+    now: i64,
+) -> anyhow::Result<Option<RefreshOutcome>> {
+    let Some(sig) = login_signature(&paths.codex_login()) else {
+        return Ok(None);
+    };
+    let stored = kv_get(conn, KV_LOGIN_SIG)?;
+    if stored.as_deref() == Some(sig.as_str()) {
+        return Ok(None);
+    }
+    if stored.is_some() {
+        let last = kv_get(conn, KV_LAST_REFRESH)?.and_then(|v| v.parse::<i64>().ok());
+        if last.is_some_and(|l| now - l < SWITCH_MIN_GAP_SECS) {
+            return Ok(None); // switched again just now: the next tick asks
+        }
+    }
+    // remembered before asking, so a failing ask is reported once, not on every tick
+    kv_set(conn, KV_LOGIN_SIG, &sig)?;
+    if stored.is_none() {
+        return Ok(None);
+    }
+    let Some(bin) = resolve(bin) else {
+        return Ok(None);
+    };
+    kv_set(conn, KV_LAST_REFRESH, &now.to_string())?;
+    ask_and_store(paths, conn, &bin, now, REFRESH_TIMEOUT).map(Some)
+}
+
+fn kv_get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT value FROM kv WHERE key=?1", [key], |r| r.get(0))
+        .optional()
+}
+
+fn kv_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO kv(key,value) VALUES(?1,?2)",
+        [key, value],
+    )
+    .map(|_| ())
+}
+
+/// Run `codex app-server` and store its limits (no throttle check here).
+fn ask_and_store(
+    paths: &Paths,
+    conn: &mut Connection,
+    bin: &Path,
+    now: i64,
+    timeout: Duration,
+) -> anyhow::Result<RefreshOutcome> {
     // inside ~/.tokenscope, never next to the user's projects
     let dir = paths.data_dir();
     std::fs::create_dir_all(&dir)?;
-    let snaps = parse_rate_limits(&ask(&bin, &dir, timeout)?, now);
+    let snaps = parse_rate_limits(&ask(bin, &dir, timeout)?, now);
     if snaps.is_empty() {
         anyhow::bail!("codex app-server returned no rate limits");
     }

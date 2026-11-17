@@ -145,3 +145,145 @@ fn refresh_reports_errors_and_never_hangs() {
         "{e}"
     );
 }
+
+/// Stand-in for the Codex login another tool (codex-multi-auth, `codex login`) rewrites on a
+/// switch. Mode 000: tokenscope may look at its metadata but must never need to open it.
+fn login(paths: &Paths, content: &str) {
+    let dir = paths.home.join(".codex");
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("auth.json");
+    if f.exists() {
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    std::fs::write(&f, content).unwrap();
+    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o000)).unwrap();
+}
+
+fn codex_rows(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM limit_snapshots WHERE vendor='codex'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// A fake app-server answering with the fixture; each run appends a line to `runs`.
+fn counting_codex(dir: &Path) -> std::path::PathBuf {
+    let fx = dir.join("fx.json");
+    std::fs::write(&fx, format!("{}\n", FIXTURE.trim())).unwrap();
+    fake_codex(
+        dir,
+        &format!("echo run >> {}/runs; cat {}", dir.display(), fx.display()),
+    )
+}
+
+fn runs(dir: &Path) -> usize {
+    std::fs::read_to_string(dir.join("runs"))
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn follows_an_account_switch_by_the_login_files_metadata() {
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let mut conn = db::open(&paths.db()).unwrap();
+    let cfg = Config::default();
+    let bin = counting_codex(h.path());
+    let follow = |conn: &mut rusqlite::Connection, now| {
+        codex_usage::follow_switch_with(&paths, &cfg, conn, &bin, now).unwrap()
+    };
+    // not logged in: nothing to follow
+    assert_eq!(follow(&mut conn, 1000), None);
+    // first look only remembers the login; unchanged, nothing happens
+    login(&paths, "account A");
+    assert_eq!(follow(&mut conn, 1030), None);
+    assert_eq!(follow(&mut conn, 1060), None);
+    assert_eq!((runs(h.path()), codex_rows(&conn)), (0, 0));
+    // a refresh just ran, so the 5-minute throttle is closed...
+    assert_eq!(
+        codex_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1100).unwrap(),
+        RefreshOutcome::Ran
+    );
+    assert_eq!(runs(h.path()), 1);
+    // ...but a switch is a new account: asked right away, and the throttle is restamped
+    login(&paths, "account B, a longer login");
+    assert_eq!(follow(&mut conn, 1200), Some(RefreshOutcome::Ran));
+    assert_eq!(runs(h.path()), 2);
+    assert_eq!(
+        codex_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1210).unwrap(),
+        RefreshOutcome::Throttled { next_allowed: 1500 }
+    );
+    assert_eq!(follow(&mut conn, 1230), None, "same login, nothing new");
+}
+
+#[test]
+fn quick_switches_are_followed_at_most_once_a_minute() {
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let mut conn = db::open(&paths.db()).unwrap();
+    let cfg = Config::default();
+    let bin = counting_codex(h.path());
+    let mut follow =
+        |now| codex_usage::follow_switch_with(&paths, &cfg, &mut conn, &bin, now).unwrap();
+    login(&paths, "A");
+    assert_eq!(follow(1000), None);
+    login(&paths, "BB");
+    assert_eq!(follow(1010), Some(RefreshOutcome::Ran));
+    // switched again 20 s later: waits for the minute to pass, then asks once
+    login(&paths, "CCC");
+    assert_eq!(follow(1030), None);
+    assert_eq!(follow(1060), None);
+    assert_eq!(follow(1075), Some(RefreshOutcome::Ran));
+    assert_eq!(follow(1200), None);
+    assert_eq!(runs(h.path()), 2);
+}
+
+#[test]
+fn a_failed_follow_is_reported_once_not_retried_every_tick() {
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let mut conn = db::open(&paths.db()).unwrap();
+    let cfg = Config::default();
+    let bin = fake_codex(
+        h.path(),
+        r#"echo run >> runs; echo '{"id":2,"error":{"code":-32600,"message":"not logged in"}}'"#,
+    );
+    login(&paths, "A");
+    codex_usage::follow_switch_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
+    login(&paths, "BB");
+    let e = codex_usage::follow_switch_with(&paths, &cfg, &mut conn, &bin, 1100)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("not logged in"), "{e}");
+    assert_eq!(
+        codex_usage::follow_switch_with(&paths, &cfg, &mut conn, &bin, 1200).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn the_background_collector_follows_a_switch() {
+    use tokenscope::collect::Collector;
+    let h = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: h.path().to_path_buf(),
+    };
+    let bin = counting_codex(h.path());
+    let mut c = Collector::with_adapters(paths.clone(), Config::default(), vec![]).codex_bin(bin);
+    login(&paths, "A");
+    assert!(c.tick().ok());
+    login(&paths, "BB");
+    assert!(c.tick().ok());
+    assert_eq!(runs(h.path()), 1);
+    let conn = db::open(&paths.db()).unwrap();
+    assert_eq!(codex_rows(&conn), 3);
+    assert!(c.take_log().is_empty());
+}

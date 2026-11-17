@@ -113,7 +113,7 @@ tokenscope serve     # open http://127.0.0.1:8765
 | Claude Code open sessions | `~/.claude/sessions/<pid>.json` | Which `claude` sessions are open and whether each is working or waiting for input. Only those `.json` files are read (never the `.key` files next to them), and only while their process is running. |
 | Claude Code limits | `claude -p --no-session-persistence "/usage"`, and optionally status line snapshots | `/usage` runs on demand only (Refresh Claude button or `status --refresh`, at most once every 5 minutes) and saves no session. The status line hook below adds a reading on every message. |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | Tokens plus the rate-limit info Codex logs. |
-| Codex limits | `codex app-server` (`account/rateLimits/read`) | On demand (Refresh Codex button or `status --refresh`, at most once every 5 minutes). Structured JSON, no model call; only the signed-in account. |
+| Codex limits | `codex app-server` (`account/rateLimits/read`) | On demand (Refresh Codex button or `status --refresh`, at most once every 5 minutes), and right after an account switch (see below). Structured JSON, no model call; only the signed-in account. |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Opened read-only. |
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` (or `$PI_CODING_AGENT_SESSION_DIR`, `$PI_CODING_AGENT_DIR/sessions`) | Tokens, model and tool calls per reply, plus side calls such as cache warming. Pi keeps no account id, so it has no rate-limit cards. `auth.json` is never read. |
 | Antigravity | `agy -p "/usage"` | Run on demand only, at most once every 5 minutes. |
@@ -123,6 +123,8 @@ Log files are only read, never modified.
 The Active tab shows sessions that are open now and those written in the last few minutes, as "N open · M working". Claude Code sessions are seen directly, so an open session waiting for input shows as idle. For Codex, OpenCode and Pi only the logs are visible: a session counts as working while its log was written in the last `active_minutes`.
 
 Limits are shown one row per account, with a status column ("Available", "Limit reached until …", "No current reading"). When a Claude or Codex window resets or its reading goes stale, the dashboard keeps the old number (muted) and asks the tool for a new reading on its own; agy is refreshed only by its button, because its `/usage` may use quota. Windows last seen under an older plan (a monthly window from before a free → Plus upgrade) are dropped.
+
+**Several Codex accounts.** Codex can only report the account that is logged in. If you switch accounts with another tool (for example [codex-multi-auth](https://www.npmjs.com/package/codex-multi-auth)) or with `codex login`, tokenscope notices within one collect interval and asks for the new account's limits right away. It does this by watching the modification time, size and inode of `~/.codex/auth.json`; the file itself is never opened. Each account you switch to gets its own row, showing the numbers from the last time it was logged in. tokenscope does not switch accounts itself.
 
 ## Claude Code rate limits
 
