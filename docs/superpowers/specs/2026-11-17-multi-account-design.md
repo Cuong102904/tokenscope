@@ -1,6 +1,7 @@
-# Multi-account Claude (and Codex): per-account usage, and optional switching
+# Multi-account Claude (and Codex): per-account usage and quota, read-only
 
-Status: draft for approval. Date: 2026-11-17.
+Status: draft for approval. Date: 2026-11-17. Revised 2026-11-17: the account switcher
+(Switch button, `switch` operation) was dropped; the optional layer only reads quota.
 
 ## Intent and why
 
@@ -14,10 +15,10 @@ cannot tell the accounts apart:
   usage and limits now sit under different account keys and cannot be joined.
 - Claude and Codex only report limits for the account that is logged in right now.
 
-The owner's main use is deciding when to switch: at a glance, which account is which (by its real
-email, never a hash), how much each has used, and how much quota is left. Then, where a
-switcher is installed, switch from the dashboard. Not everyone uses claude-swap or
-codex-multi-auth, so the feature must work, in a useful reduced form, without any of them.
+The owner's main use is seeing, at a glance, every account on the machine: which is which (by its
+real email, never a hash), how much each has used, and how much quota is left. Switching accounts
+is not tokenscope's job (the owner switches with other tools). Not everyone uses claude-swap, so
+the feature must work, in a useful reduced form, without any external tool.
 
 ## Findings that shape the design
 
@@ -32,8 +33,16 @@ codex-multi-auth, so the feature must work, in a useful reduced form, without an
   invisible to tokenscope; document it, do not fix it).
 - **claude-swap exposes a machine interface**: `claude-swap list --json` (schemaVersion 1) gives,
   per account, number, email, org, `active`, plan, and usage (`fiveHour`, `sevenDay`, `scoped[]`
-  with `pct`, `resetsAt`) for every account, active or not. `claude-swap switch <num|email>`
-  changes the active account.
+  with `pct`, `resetsAt`) for every account, active or not. tokenscope only uses `list`.
+- **Why only claude-swap can see quota of a logged-out account.** It keeps a backup of every
+  account's OAuth credential and calls `api.anthropic.com/api/oauth/usage` with each one. Without
+  those tokens nobody can ask, and tokenscope must not read credentials. So for an account that
+  is not signed in, tokenscope shows either the last reading taken while it was signed in (marked
+  stale or expired by the existing rules) or, when claude-swap is present, its fresh `list` data.
+- **Plain Claude Code can hold several logins too**: `CLAUDE_CONFIG_DIR=<dir> claude` is a fully
+  separate login, config and `projects/` (verified: an empty dir reports `loggedIn: false` and its
+  own `projectsDirectory`, `~/.claude` untouched). Not yet verified: that `claude /usage` run this
+  way returns 5h/weekly for a signed-in extra dir (needs a second account to log in). See D4.
 - **Key mismatch to resolve.** `session-owner` carries `accountUuid`, not an email. #17 keys
   limits by `sha8(email)`. Both must end up on one key (see Decisions, D1).
 - **Login cannot be automated.** Login is OAuth in the browser inside `claude /login`. Adding an
@@ -48,14 +57,18 @@ codex-multi-auth, so the feature must work, in a useful reduced form, without an
    weekly, with reset times and the existing time-to-limit projection) and what it has used
    (tokens and cost over the selected range). This is the screen for deciding whether to switch.
    Cost and Limits views also filter and group per account, labelled by email.
-3. When a switcher backend is available, show every account's limits, not only the active one's,
-   and offer a Switch action with a confirmation.
-4. Without any switcher, everything in 1 and 2 works and the Switch control is absent.
-5. The switcher is pluggable: claude-swap first, then codex-multi-auth, then a user-defined
-   command in `config.toml` that speaks a documented JSON contract.
+3. When a read-only quota source is available (claude-swap's `list --json` first), show every
+   account's limits, not only the signed-in one's.
+4. Without any such source, everything in 1 and 2 works; accounts that are not signed in show
+   their last known reading, marked stale.
+5. The quota source is pluggable (read-only `list`): claude-swap first; later a `claude_dirs`
+   list of extra `CLAUDE_CONFIG_DIR`s (after D4 is verified), codex-multi-auth, or a user-defined
+   command in `config.toml` that prints a documented JSON.
 
 ## Non-goals
 
+- **No account switching.** No Switch button, no `switch` operation, no endpoint that changes
+  the login. The owner switches with other tools.
 - tokenscope does not log accounts in, add accounts, or swap or copy credentials (no
   `.credentials.json` / keychain handling). Not now, not later.
 - No `tokenscope account ...` wrapper CLI that re-exposes claude-swap commands.
@@ -68,8 +81,6 @@ codex-multi-auth, so the feature must work, in a useful reduced form, without an
 ## Anti-goals (failure even if it technically works)
 
 - Reading, copying or logging any token or credential, or sending an email or uuid anywhere.
-- A Switch that silently changes the login under a running Claude session without the user
-  being told.
 - Different keys for the same account in usage vs limits, so the dashboard shows it twice.
 - Making tokenscope fail or slow down when claude-swap is missing, slow or returns unexpected JSON.
 
@@ -83,8 +94,9 @@ codex-multi-auth, so the feature must work, in a useful reduced form, without an
   telemetry) and never appear in committed fixtures. Tokens and credentials stay off limits
   as before. `CLAUDE.md` is updated in the same change (the `sha8`-only rule becomes: the
   database key is `sha8` and is never shown; display names are emails).
-- Server binds 127.0.0.1, endpoints that run processes need the `X-Tokenscope` header. A Switch
-  endpoint is such an endpoint, and a write: POST only, same header check.
+- Server binds 127.0.0.1, endpoints that run processes need the `X-Tokenscope` header. Reading
+  claude-swap's `list` happens in `/api/accounts` (throttled); nothing in this feature writes to
+  the user's login.
 - Tests never run the real `claude`, `codex`, `claude-swap`; they use a fake script on `PATH`
   (serialized with the spawn lock added in #17's test fix).
 
@@ -96,8 +108,11 @@ codex-multi-auth, so the feature must work, in a useful reduced form, without an
 2. **Depend on claude-swap only** (call its CLI, nothing without it). Rejected by the owner:
    most users will not have it, and per-account usage does not need it.
 3. **Two layers (chosen by the owner):** passive attribution that needs nothing, plus an optional,
-   pluggable switcher interface with claude-swap as first backend and a user-defined command as
-   the generic escape hatch.
+   pluggable read-only quota source with claude-swap as first backend and a user-defined command
+   as the generic escape hatch.
+4. **Add a Switch action on top of layer 2.** Rejected by the owner (2026-11-17): the part that
+   writes the login (locks, rollback, refresh-token rotation, keychain, races with a running
+   Claude) is the risky one and not what the owner needs.
 
 ## Design
 
@@ -121,33 +136,33 @@ codex-multi-auth, so the feature must work, in a useful reduced form, without an
 - Account views (cost and limits) filter and group by account for Claude as they already do for
   Codex.
 
-### Layer 2: optional switcher
+### Layer 2: optional read-only quota source
 
-A small internal interface, independent of Claude/Codex, with two operations:
+A small internal interface, independent of Claude/Codex, with one operation:
 
-- `list() -> Vec<ManagedAccount>`: per account `{ref, display_name, active, org?, plan?,
+- `list() -> Vec<ManagedAccount>`: per account `{ref, email, active, org?, plan?,
   limits: five_hour/weekly/scoped (percent, resets_at)}`; account identity is whatever the
-  backend can give that maps to the Layer-1 key (see D1).
-- `switch(ref) -> Result`.
+  backend can give that maps to the Layer-1 key (see D1). There is no `switch`.
 
 Backends:
 
-1. **claude-swap**: `claude-swap list --json`, `claude-swap switch <num>`. Found on `PATH`;
-   absent means the layer is off. Accept `schemaVersion` 1 only and degrade to "off, with a
-   note" on anything else. Run with a timeout, never block collect.
-2. **codex-multi-auth** (second): list and switch via its CLI; details to be settled when
-   building it; same interface.
-3. **Custom command** in `config.toml`, for any other tool or the user's own script:
+1. **claude-swap**: `claude-swap list --json`. Found on `PATH`; absent means the layer is off.
+   Accept `schemaVersion` 1 only and degrade to "off, with a note" on anything else. Run with a
+   timeout, never block collect.
+2. **Extra Claude config dirs** (after D4 is verified): `claude_dirs = ["~/.claude-work"]` in
+   `config.toml`; for each dir tokenscope runs `claude /usage` with `CLAUDE_CONFIG_DIR` set (the
+   `claude` binary reads its own login; tokenscope opens no credential file) and scans that
+   dir's `projects/` for usage.
+3. **codex-multi-auth**: list via its CLI; details settled when building it.
+4. **Custom command** in `config.toml`, for any other tool or the user's own script:
 
    ```toml
-   [switcher.claude]
-   list   = "my-script list"        # prints the JSON below on stdout
-   switch = "my-script switch {ref}"
+   [quota.claude]
+   list = "my-script list"        # prints the JSON below on stdout
    ```
 
-   The documented JSON for `list` mirrors `ManagedAccount` (schema version field included).
-   tokenscope runs it without a shell string interpolation of untrusted input: `ref` comes only
-   from the previous `list` output and is passed as a single argument.
+   The documented JSON mirrors `ManagedAccount` (schema version field included). The command
+   is run without a shell and with no untrusted input in its arguments.
 
 What Layer 2 feeds:
 
@@ -156,33 +171,32 @@ What Layer 2 feeds:
 - Each account row also shows the backend's own plan and "ahead of pace / will last to reset"
   hints when it provides them (claude-swap does), so the overview can say "account 1: weekly
   100%, resets Nov 20" next to "account 2: 7%" without the user doing arithmetic.
-- A Switch button appears on a non-active account row only when a backend is available. It asks
-  for confirmation that states what will change (the login used by new Claude sessions), calls
-  `switch`, then refreshes. The endpoint is a POST guarded like the other process-running ones.
-- No backend: no button, no error; one line in the empty state explains how to get one
-  (link to claude-swap, or the custom-command snippet).
+- No backend: no error; an account that is not signed in shows its last reading marked stale or
+  expired; one line in the empty state says how to get fresh numbers (claude-swap link, or the
+  custom-command snippet).
 
 ### Accounts overview (priority UI)
 
 Order of importance for the builder: (1) email + signed-in marker + 5h/weekly remaining with
-reset, (2) used tokens/cost for the range, (3) Switch button. Sort: signed-in first, then by
+reset, (2) used tokens/cost for the range. Sort: signed-in first, then by
 least quota left last. An account at 100% weekly is visibly flagged. Text sketch:
 
 ```
 Accounts
  ● you@example.com        Team   5h  3%  resets 19:00 | week  7%  resets Nov 19   used 1.2M tok  $14.20
- ○ work@example.org       Max    5h  0%             | week 100%  resets Nov 20   used 9.8M tok  $96.10   [Switch]
+ ○ work@example.org       Max    5h  0%             | week 100%  resets Nov 20   used 9.8M tok  $96.10   (reading 2h old)
 ```
 
 ### Onboarding text (no code that logs in)
 
-When claude-swap is installed but manages fewer than two accounts, the accounts area shows the
-three steps: `claude /login` as the new account, `claude-swap add`, repeat. Wording only.
+When only one account is known, the accounts area explains in one line that other accounts appear
+once they have used Claude on this machine, and how to get fresh numbers for them. Wording only;
+no code that logs in.
 
 ### README
 
-Document both layers, the claude-swap credit and link (MIT), the custom-command contract, and
-the `--no-share-history` caveat.
+Document both layers, the claude-swap credit and link (MIT), the custom-command contract,
+`claude_dirs`, and the `--no-share-history` caveat.
 
 ## Decisions made by the designer (owner may overrule)
 
@@ -191,11 +205,15 @@ the `--no-share-history` caveat.
   `~/.claude.json` (metadata, no token; verified: `claude auth status --json` has no uuid). #17's `sha8(email)` keys are migrated to the
   uuid key once the uuid for that email is known (kv labels follow, and the email moves into the registry). If the uuid cannot be
   obtained for the signed-in account, fall back to the current `sha8(email)` behaviour and say so.
-- **D2 order of work.** Layer 1 (usage attribution plus key unification) first and shippable on
-  its own; then switcher interface plus claude-swap backend plus Switch button; then
-  codex-multi-auth and the custom command.
+- **D2 order of work.** Layer 1 (usage attribution plus key unification, Tasks 1-5) first and
+  shippable on its own; then the read-only quota source with the claude-swap backend; then
+  `claude_dirs`, codex-multi-auth and the custom command.
 - **D3 sessions without an owner** stay under the fallback key and show as "unknown"; no
   guessing from timing.
+- **D4 `claude_dirs` is unverified.** Before building it, someone with a second account must run
+  `CLAUDE_CONFIG_DIR=~/.claude-test claude` (`/login`), then
+  `CLAUDE_CONFIG_DIR=~/.claude-test claude -p --no-session-persistence "/usage"` and confirm it
+  prints 5-hour and weekly lines. If it does not, claude-swap stays the only fresh source.
 
 ## Open questions for the builder
 
@@ -203,9 +221,6 @@ the `--no-share-history` caveat.
   `auth.json`? If so Codex accounts get the same registry; if not they keep the hash-with-label
   behaviour from #16 for now (display emails only where a safe source exists).
 
-- What happens to a running Claude session when `claude-swap switch` runs, and does claude-swap
-  refuse or warn when Claude is running (it has process detection)? The confirmation text and
-  whether to pass a flag depend on this. Check claude-swap's docs/help; do not assume.
 - Does a session resumed (`--resume`) under another account get a new `session-owner` line or a
   second line in the same file? Seen so far: never two owners in one file. If it can happen,
   decide per-row attribution by position in the file instead of per-file.
@@ -219,12 +234,12 @@ the `--no-share-history` caveat.
 
 Unit and integration tests with fixtures only (no real accounts): transcripts with and without
 `session-owner`, multi-account usage rows, key migration from `sha8(email)`, a fake
-`claude-swap` script for `list --json` (ok, unknown schemaVersion, timeout, absent) and for
-`switch`, the POST endpoint's header and method checks, and the custom-command contract.
+`claude-swap` script for `list --json` (ok, unknown schemaVersion, timeout, absent, exit 1), and
+the custom-command contract.
 Never commit real transcript lines or real emails.
 
 ## Left to the builder
 
-UI layout of the accounts area and the Switch confirmation, the exact internal trait/struct
-names, DB schema additions beyond the existing columns (prefer none), the second and third
+UI layout of the accounts area, the exact internal trait/struct
+names, DB schema additions beyond the existing columns (prefer none), the later
 backends' details, and the README wording.
