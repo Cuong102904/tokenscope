@@ -8,6 +8,22 @@ use tokenscope::paths::Paths;
 
 const FIXTURE: &str = include_str!("fixtures/claude_usage/usage.txt");
 
+/// Writing a fake `claude` script and spawning one must not overlap across test threads: a
+/// fork that happens while another thread holds the script open for writing makes that
+/// script's `exec` fail with ETXTBSY ("Text file busy"). Both go through this lock.
+static SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn locked_refresh(
+    paths: &Paths,
+    cfg: &Config,
+    conn: &mut rusqlite::Connection,
+    bin: &Path,
+    now: i64,
+) -> anyhow::Result<RefreshOutcome> {
+    let _g = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
+    claude_usage::refresh_with(paths, cfg, conn, bin, now)
+}
+
 fn local(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
     Local
         .with_ymd_and_hms(y, mo, d, h, mi, 0)
@@ -104,6 +120,7 @@ fn ignores_unrelated_lines_and_keeps_a_reading_without_reset() {
 }
 
 fn fake_claude(dir: &Path, body: &str) -> std::path::PathBuf {
+    let _g = SPAWN.lock().unwrap_or_else(|e| e.into_inner());
     let p = dir.join("claude");
     std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -134,7 +151,7 @@ fn refresh_runs_without_saving_a_session_and_throttles() {
     );
     let now = local(2026, 11, 6, 11, 0);
     assert_eq!(
-        claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, now).unwrap(),
+        locked_refresh(&paths, &cfg, &mut conn, &bin, now).unwrap(),
         RefreshOutcome::Ran
     );
     let args = std::fs::read_to_string(h.path().join("args")).unwrap();
@@ -150,13 +167,13 @@ fn refresh_runs_without_saving_a_session_and_throttles() {
         .unwrap();
     assert_eq!(n, 3);
     assert_eq!(
-        claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, now + 299).unwrap(),
+        locked_refresh(&paths, &cfg, &mut conn, &bin, now + 299).unwrap(),
         RefreshOutcome::Throttled {
             next_allowed: now + 300
         }
     );
     assert_eq!(
-        claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, now + 300).unwrap(),
+        locked_refresh(&paths, &cfg, &mut conn, &bin, now + 300).unwrap(),
         RefreshOutcome::Ran
     );
 }
@@ -169,12 +186,10 @@ fn refresh_reports_missing_binary_and_unusable_output() {
     };
     let mut conn = db::open(&paths.db()).unwrap();
     let cfg = Config::default();
-    let out =
-        claude_usage::refresh_with(&paths, &cfg, &mut conn, &h.path().join("nope/claude"), 1000)
-            .unwrap();
+    let out = locked_refresh(&paths, &cfg, &mut conn, &h.path().join("nope/claude"), 1000).unwrap();
     assert_eq!(out, RefreshOutcome::NotInstalled);
     let bin = fake_claude(h.path(), "echo 'Invalid API key · Please run /login'");
-    let e = claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 2000)
+    let e = locked_refresh(&paths, &cfg, &mut conn, &bin, 2000)
         .unwrap_err()
         .to_string();
     assert!(
@@ -263,7 +278,7 @@ fn readings_are_keyed_and_named_by_the_signed_in_account() {
     )
     .unwrap();
     let t0 = local(2026, 11, 6, 11, 0);
-    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0).unwrap();
+    locked_refresh(&paths, &cfg, &mut conn, &bin, t0).unwrap();
     let key = sha8("me@example.com");
     assert_eq!(
         accounts(&conn),
@@ -288,7 +303,7 @@ fn readings_are_keyed_and_named_by_the_signed_in_account() {
         [format!("label:claude:{key}")],
     )
     .unwrap();
-    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0 + 400).unwrap();
+    locked_refresh(&paths, &cfg, &mut conn, &bin, t0 + 400).unwrap();
     let label: String = conn
         .query_row(
             "SELECT value FROM kv WHERE key = ?1",
@@ -306,9 +321,9 @@ fn switching_claude_account_adds_a_row_and_keeps_the_old_one() {
     let cfg = Config::default();
     let bin = identity_claude(h.path(), &auth_json("a@example.com"));
     let t0 = local(2026, 11, 6, 11, 0);
-    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0).unwrap();
+    locked_refresh(&paths, &cfg, &mut conn, &bin, t0).unwrap();
     std::fs::write(h.path().join("auth.txt"), auth_json("b@example.com")).unwrap();
-    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, t0 + 400).unwrap();
+    locked_refresh(&paths, &cfg, &mut conn, &bin, t0 + 400).unwrap();
     let mut want = vec![sha8("a@example.com"), sha8("b@example.com")];
     want.sort();
     assert_eq!(accounts(&conn), want);
@@ -334,7 +349,7 @@ fn an_account_chosen_in_config_is_left_alone() {
         ..Config::default()
     };
     let bin = identity_claude(h.path(), &auth_json("me@example.com"));
-    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
+    locked_refresh(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
     assert_eq!(accounts(&conn), ["work"]);
     assert!(
         !h.path().join("auth_calls").exists(),
@@ -348,7 +363,7 @@ fn without_an_identity_the_old_key_is_used() {
     let cfg = Config::default();
     let bin = identity_claude(h.path(), r#"{"loggedIn":false}"#);
     assert_eq!(
-        claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap(),
+        locked_refresh(&paths, &cfg, &mut conn, &bin, 1000).unwrap(),
         RefreshOutcome::Ran
     );
     assert_eq!(accounts(&conn), ["default"]);
@@ -370,7 +385,7 @@ fn statusline_snapshots_follow_the_identified_account() {
     let (h, paths, mut conn) = setup_home();
     let cfg = Config::default();
     let bin = identity_claude(h.path(), &auth_json("me@example.com"));
-    claude_usage::refresh_with(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
+    locked_refresh(&paths, &cfg, &mut conn, &bin, 1000).unwrap();
     let dir = paths.snapshots_dir();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
