@@ -1,0 +1,3 @@
+{"type":"summary","summary":"x"}
+{"type":"session-owner","accountUuid":"uuid-own","organizationUuid":"org-1","sessionId":"sOwn"}
+{"type":"assistant","sessionId":"sOwn","cwd":"/home/u/proj","isSidechain":false,"requestId":"r_own","timestamp":"2026-11-05T01:00:00.000Z","message":{"id":"m_own","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[]}}

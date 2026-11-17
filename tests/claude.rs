@@ -123,3 +123,151 @@ fn missing_ids_skipped() {
     parse_line(&v, "default", &mut b);
     assert!(b.usage.is_empty());
 }
+
+// ---- per-account attribution (session-owner) ----
+
+use tokenscope::accounts::claude_key;
+use tokenscope::adapters::claude::parse_owner;
+
+fn owner_home() -> (tempfile::TempDir, Paths, rusqlite::Connection) {
+    let d = tempfile::tempdir().unwrap();
+    copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-owner"),
+        d.path(),
+    );
+    let paths = Paths {
+        home: d.path().to_path_buf(),
+    };
+    let conn = db::open(&d.path().join("t.db")).unwrap();
+    (d, paths, conn)
+}
+
+/// One collect pass, written and marked done like the collector does.
+fn collect_once(paths: &Paths, conn: &mut rusqlite::Connection, cfg: &Config) {
+    let mut ctx = CollectCtx {
+        conn,
+        paths,
+        config: cfg,
+        done_files: vec![],
+        unreadable: 0,
+        remove_after_write: vec![],
+    };
+    let batch = ClaudeAdapter.collect(&mut ctx).unwrap();
+    let done = std::mem::take(&mut ctx.done_files);
+    db::write_batch(conn, &batch).unwrap();
+    scan::mark_done(conn, &done).unwrap();
+}
+
+fn account_of(conn: &rusqlite::Connection, msg: &str) -> String {
+    conn.query_row(
+        "SELECT account FROM usage WHERE msg_key = ?1",
+        [format!("claude:{msg}")],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn parse_owner_reads_uuid_and_org() {
+    let v =
+        json!({"type":"session-owner","accountUuid":"u","organizationUuid":"o","sessionId":"s"});
+    assert_eq!(parse_owner(&v), Some(("u".into(), Some("o".into()))));
+    let no_org = json!({"type":"session-owner","accountUuid":"u"});
+    assert_eq!(parse_owner(&no_org), Some(("u".into(), None)));
+}
+
+#[test]
+fn parse_owner_rejects_empty_or_non_string_uuid() {
+    for v in [
+        json!({"type":"session-owner","accountUuid":""}),
+        json!({"type":"session-owner","accountUuid":7}),
+        json!({"type":"session-owner"}),
+        json!({"type":"assistant","accountUuid":"u"}),
+    ] {
+        assert_eq!(parse_owner(&v), None, "{v}");
+    }
+}
+
+#[test]
+fn usage_rows_take_the_owner_account() {
+    let (_d, paths, mut conn) = owner_home();
+    collect_once(&paths, &mut conn, &Config::default());
+    assert_eq!(
+        account_of(&conn, "m_own|r_own"),
+        claude_key("uuid-own", Some("org-1"))
+    );
+    assert_eq!(
+        account_of(&conn, "m_par|r_par"),
+        claude_key("uuid-par", Some("org-2"))
+    );
+}
+
+#[test]
+fn session_without_owner_keeps_the_configured_account() {
+    let (_d, paths, mut conn) = owner_home();
+    collect_once(&paths, &mut conn, &Config::default());
+    assert_eq!(account_of(&conn, "m_none|r_none"), "default");
+    let cfg = Config {
+        claude_account: "work".into(),
+        ..Config::default()
+    };
+    let (_d2, paths2, mut conn2) = owner_home();
+    collect_once(&paths2, &mut conn2, &cfg);
+    assert_eq!(account_of(&conn2, "m_none|r_none"), "work");
+}
+
+#[test]
+fn subagent_file_uses_the_parent_owner_even_when_parent_unchanged() {
+    let (d, paths, mut conn) = owner_home();
+    collect_once(&paths, &mut conn, &Config::default());
+    let parent_key = claude_key("uuid-par", Some("org-2"));
+    assert_eq!(account_of(&conn, "m_sub|r_sub"), parent_key);
+    // only the subagent file grows; the parent is not re-read as a changed file
+    let sub = d
+        .path()
+        .join(".claude/projects/-home-u-proj/sPar/subagents/agent-a.jsonl");
+    let mut text = std::fs::read_to_string(&sub).unwrap();
+    text.push_str(&text.replace("m_sub", "m_sub2").replace("r_sub", "r_sub2"));
+    std::fs::write(&sub, text).unwrap();
+    collect_once(&paths, &mut conn, &Config::default());
+    assert_eq!(account_of(&conn, "m_sub2|r_sub2"), parent_key);
+}
+
+#[test]
+fn rescan_moves_old_default_rows() {
+    let (_d, paths, mut conn) = owner_home();
+    // state of an install from before attribution: rows under "default", files already done
+    let old = Config::default();
+    let mut ctx = CollectCtx {
+        conn: &conn,
+        paths: &paths,
+        config: &old,
+        done_files: vec![],
+        unreadable: 0,
+        remove_after_write: vec![],
+    };
+    let mut batch = ClaudeAdapter.collect(&mut ctx).unwrap();
+    let done = std::mem::take(&mut ctx.done_files);
+    for r in &mut batch.usage {
+        r.account = "default".into();
+    }
+    batch.kv.clear(); // as if the one-time rescan had not run yet
+    db::write_batch(&mut conn, &batch).unwrap();
+    scan::mark_done(&conn, &done).unwrap();
+    assert_eq!(account_of(&conn, "m_own|r_own"), "default");
+    // nothing changed on disk, yet the next collect re-reads once and re-attributes
+    collect_once(&paths, &mut conn, &Config::default());
+    assert_eq!(
+        account_of(&conn, "m_own|r_own"),
+        claude_key("uuid-own", Some("org-1"))
+    );
+    // and only once
+    let before: i64 = conn
+        .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+        .unwrap();
+    collect_once(&paths, &mut conn, &Config::default());
+    let after: i64 = conn
+        .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(before, after);
+}
