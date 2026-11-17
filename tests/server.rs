@@ -655,3 +655,14 @@ async fn api_accounts_returns_rows_and_never_the_raw_key_as_label() {
             .all(|r| r["vendor"] == "codex")
     );
 }
+
+#[tokio::test]
+async fn dashboard_html_has_the_accounts_tab() {
+    let (_d, st) = setup();
+    let (s, html) = get(&st, "/").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(html.contains(r##"<a href="#accounts" data-tab="accounts">"##));
+    assert!(html.contains(r#"data-pane="accounts""#));
+    let (_, js) = get(&st, "/app.js").await;
+    assert!(js.contains("renderAccounts") && js.contains("'/api/accounts?'"));
+}

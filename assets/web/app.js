@@ -45,7 +45,7 @@ const fmtTs = ts => {
 const fmtClock = () => new Date().toLocaleTimeString('en-GB');
 const tickMoney = v => '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits: v < 10 ? 2 : 0});
 
-const TABS = ['overview', 'limits', 'cost', 'sessions', 'skills', 'active'];
+const TABS = ['overview', 'accounts', 'limits', 'cost', 'sessions', 'skills', 'active'];
 const FILTERS = ['days', 'vendor', 'model', 'project'];
 const DEFAULT_DAYS = '30';
 const charts = {};
@@ -212,6 +212,47 @@ async function renderOverview() {
   renderLimitCards($('ovLimits'), shown, true);
   autoRefresh(shown);
   if (old.size) $('ovLimits').insertAdjacentHTML('beforeend', `<div class="note" style="margin:6px 0 0"><a href="#limits">+${esc(old.size)} ${old.size === 1 ? 'account' : 'accounts'} without a current reading — see the Limits tab</a></div>`);
+}
+
+// ---------- accounts: one row per account, quota left and usage over the range ----------
+// one window of one account: "93% left", a bar, when it resets; an old reading says so
+function accountCell(w) {
+  if (!w) return '<td class="lc none">—</td>';
+  const p = Math.max(0, Math.min(100, Number(w.used_percent)));
+  const lv = w.expired || w.stale ? 'old' : level(p);
+  let main, sub = '';
+  if (w.expired) {
+    main = `${esc(fmtPct(w.used_percent))} <span class="lmeta">before the reset</span>`;
+  } else {
+    main = p >= 100 ? 'Limit reached' : esc(fmtPct(100 - p)) + ' left';
+    sub = w.resets_at != null ? 'resets ' + esc(resetShort(w.resets_at)) + ' · ' + esc(until(w.resets_at)) : '';
+  }
+  if (w.expired || w.stale) sub += (sub ? ' · ' : '') + '<span class="badge">reading ' + esc(ago(w.measured_at)) + '</span>';
+  const tip = fmtPct(w.used_percent) + ' used\nMeasured ' + fmtTs(w.measured_at) + ' · ' + ago(w.measured_at);
+  return `<td title="${esc(tip)}"><div class="lv ${lv}">${main}</div><div class="bar"><i class="${lv}" style="width:${esc(p)}%"></i></div><div class="lmeta">${sub}</div></td>`;
+}
+function accountNameCell(a) {
+  const dot = a.current ? '<span class="cur" title="Signed in now: the account that has the newest reading of its vendor">● signed in</span>' : '';
+  const tip = [a.email, a.org, a.plan, vendorName(a.vendor)].filter(Boolean).join('\n');
+  return `<td class="acc"><div class="an" title="${esc(tip || a.label)}"><span class="nm">${esc(a.label)}</span> ${dot}</div>` +
+    `<div class="lmeta">${esc([vendorName(a.vendor), a.org, a.plan].filter(Boolean).join(' · '))}</div></td>`;
+}
+async function renderAccounts() {
+  const d = await getJson('/api/accounts?' + apiQuery());
+  const rows = d.accounts;
+  $('accCount').textContent = rows.length ? plural(rows.length, 'account') : '';
+  const scopes = [...new Set(rows.flatMap(a => a.windows.map(w => w.scope)))].sort(byWindow);
+  // usage sits right after the name so it stays in view when many window columns make the table wide
+  $('accBody').innerHTML = rows.length
+    ? '<table class="ltab"><thead><tr><th>Account</th><th>Used · range</th>' + scopes.map(sc => `<th>${esc(scopeLabel(sc))}</th>`).join('') +
+      '</tr></thead><tbody>' +
+      rows.map(a => '<tr>' + accountNameCell(a) +
+        `<td class="used"><div class="lv">${esc(costText(a.cost, a.priced_cost))}</div><div class="lmeta">${esc(num(a.tokens))} tokens</div></td>` +
+        scopes.map(sc => accountCell(a.windows.find(w => w.scope === sc))).join('') + '</tr>').join('') + '</tbody></table>'
+    : '<div class="empty">No accounts yet. Sign in once with Claude Code and it appears here.</div>';
+  const old = rows.some(a => !a.current && a.windows.some(w => w.expired || w.stale));
+  $('accNote').hidden = !old;
+  if (old) $('accNote').textContent = 'Only the signed-in account is read live. The others show the last reading taken while they were signed in, so those numbers can be out of date. Tokens and cost cover the selected time range, at API list prices.';
 }
 
 // ---------- limits ----------
@@ -789,7 +830,7 @@ async function loadMeta() {
 }
 
 // ---------- router + refresh ----------
-const RENDER = {overview: renderOverview, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions, skills: renderSkills, active: renderActive};
+const RENDER = {overview: renderOverview, accounts: renderAccounts, limits: () => renderLimits(), cost: renderCost, sessions: renderSessions, skills: renderSkills, active: renderActive};
 let busy = false, dirty = false;
 function showTab() {
   const tab = currentTab();
