@@ -186,10 +186,9 @@ the `--no-share-history` caveat.
 
 ## Decisions made by the designer (owner may overrule)
 
-- **D1 account key.** Internal database key only (never displayed): `sha8(accountUuid)` for Claude, because the transcript
-  gives only the uuid. The signed-in account's uuid is read from `oauthAccount.accountUuid` in
-  `~/.claude.json` (metadata, no token), or from `claude auth status --json` if it exposes it;
-  the builder verifies which works and records it. #17's `sha8(email)` keys are migrated to the
+- **D1 account key.** Internal database key only (never displayed): `sha8(accountUuid:organizationUuid)` for Claude (the org is part of the key so one email in two orgs stays two accounts; `session-owner` carries both ids), because the transcript
+  gives only the uuid. The signed-in account's ids are read from `oauthAccount.accountUuid` / `organizationUuid` / `emailAddress` in
+  `~/.claude.json` (metadata, no token; verified: `claude auth status --json` has no uuid). #17's `sha8(email)` keys are migrated to the
   uuid key once the uuid for that email is known (kv labels follow, and the email moves into the registry). If the uuid cannot be
   obtained for the signed-in account, fall back to the current `sha8(email)` behaviour and say so.
 - **D2 order of work.** Layer 1 (usage attribution plus key unification) first and shippable on
