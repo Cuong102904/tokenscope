@@ -126,6 +126,8 @@ Limits are shown one row per account, with a status column ("Available", "Limit 
 
 **Several Codex accounts.** Codex can only report the account that is logged in. If you switch accounts with another tool (for example [codex-multi-auth](https://www.npmjs.com/package/codex-multi-auth)) or with `codex login`, tokenscope notices within one collect interval and asks for the new account's limits right away. It does this by watching the modification time, size and inode of `~/.codex/auth.json`; the file itself is never opened. Each account you switch to gets its own row, showing the numbers from the last time it was logged in. tokenscope does not switch accounts itself.
 
+**Naming accounts.** Accounts show as `codex:f8ce04de` (a short hash). Click the pencil next to a name on the Limits tab to give it a readable one (a work email, "personal", …); a blank name removes it. Names are kept in the local database. With more than one account for a vendor, the one with the newest reading is marked **Current**: that is the account that is logged in. Names set in `[labels]` of `config.toml` take precedence and cannot be changed from the dashboard.
+
 ## Claude Code rate limits
 
 Claude Code keeps its 5-hour and weekly usage on Anthropic's side; no local log has it. tokenscope reads it in two ways, and neither touches your Claude credentials:

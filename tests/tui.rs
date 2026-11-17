@@ -30,6 +30,8 @@ fn card(scope: &str, pct: f64, stale: bool, expired: bool) -> LimitCard {
         eta: None,
         eta_note: String::new(),
         warning: None,
+        current: false,
+        label_editable: true,
     }
 }
 

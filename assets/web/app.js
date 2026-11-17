@@ -313,7 +313,45 @@ function limitAccounts(cards) {
   return [...m].map(([key, cs]) => ({key, cards: cs})).sort((a, b) => newest(b.cards) - newest(a.cards));
 }
 
+// name cell of an account: its name, a "Current" badge when the vendor has several accounts
+// and this has the newest reading, and (Limits tab only) a pencil to rename it
+function accountName(a, many, mini) {
+  const cur = many && a.current ? ' <span class="cur" title="Newest reading of this vendor: the account that is logged in">Current</span>' : '';
+  const ren = !mini && a.label_editable && a.account
+    ? ` <button type="button" class="ren" data-v="${esc(a.vendor)}" data-a="${esc(a.account)}" data-l="${esc(a.account_label)}" title="Rename this account" aria-label="Rename ${esc(a.account_label)}">✎</button>` : '';
+  return `<div class="an" title="${esc(a.account_label)}"><span class="nm">${esc(a.account_label)}</span>${cur}${ren}</div>`;
+}
+async function saveLabel(vendor, account, label) {
+  try {
+    const r = await fetch('/api/account-label', {method: 'POST', cache: 'no-store', headers: {'X-Tokenscope': '1', 'Content-Type': 'application/json'},
+      body: JSON.stringify({vendor, account, label})});
+    if (!r.ok) throw new Error((await r.text()) || 'HTTP ' + r.status);
+    $('refreshMsg').textContent = label.trim() ? 'Saved the name.' : 'Removed the name.';
+  } catch (e) {
+    $('refreshMsg').textContent = 'Could not save the name: ' + e.message;
+  }
+  refresh();
+}
+function editLabel(btn) {
+  const cell = btn.closest('.an');
+  const input = document.createElement('input');
+  input.className = 'an-edit'; input.type = 'text'; input.maxLength = 60; input.value = btn.dataset.l;
+  input.placeholder = 'Name, e.g. work or an email';
+  input.setAttribute('aria-label', 'Account name');
+  // keys typed here must not reach the card handler (it swallows Space)
+  input.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    // leave the field first: renderLimitCards keeps a focused field untouched
+    if (ev.key === 'Enter') { ev.preventDefault(); input.dataset.done = '1'; input.blur(); saveLabel(btn.dataset.v, btn.dataset.a, input.value); }
+    else if (ev.key === 'Escape') { input.dataset.done = '1'; input.blur(); rerenderCards(); }
+  });
+  input.addEventListener('blur', () => { if (!input.dataset.done) rerenderCards(); });
+  cell.replaceChildren(input);
+  input.focus(); input.select();
+}
+
 function renderLimitCards(el, cards, mini) {
+  if (el.querySelector('input.an-edit:focus')) return; // do not wipe a name being typed
   const vendors = new Map();
   for (const c of cards) { if (!vendors.has(c.vendor)) vendors.set(c.vendor, []); vendors.get(c.vendor).push(c); }
   el.innerHTML = vendors.size ? [...vendors].map(([v, cs]) => {
@@ -321,10 +359,11 @@ function renderLimitCards(el, cards, mini) {
     const nodata = cs.find(c => c.no_data);
     if (nodata) return head + `<div class="lmeta">${esc(nodata.eta_note)}</div></div>`;
     const scopes = [...new Set(cs.map(c => c.scope))].sort(byWindow);
-    const rows = limitAccounts(cs).map(({cards: acs}) => {
+    const accounts = limitAccounts(cs);
+    const rows = accounts.map(({cards: acs}) => {
       const a = acs.reduce((x, y) => (y.measured_at > x.measured_at ? y : x));
       const [cls, status] = accountStatus(acs);
-      return `<tr><td class="acc"><div class="an" title="${esc(a.account_label)}">${esc(a.account_label)}</div>` +
+      return `<tr><td class="acc">${accountName(a, accounts.length > 1, mini)}` +
         `<div class="lmeta">${a.plan_type ? esc(cap(a.plan_type)) + ' · ' : ''}measured ${esc(ago(a.measured_at))}</div></td>` +
         scopes.map(sc => limitCell(acs.find(c => c.scope === sc), mini)).join('') +
         `<td class="st ${cls}">${status}</td></tr>`;
@@ -851,6 +890,7 @@ function init() {
     sessPage += b.dataset.p === 'next' ? 1 : -1;
     renderSessTable();
   });
+  $('limCards').addEventListener('click', ev => { const b = ev.target.closest('button.ren'); if (b) editLabel(b); });
   onCardActivate($('limCards'), selectLimit);
   // overview mini cards open the limits tab with that card's chart
   onCardActivate($('ovLimits'), k => { setState({lim: k}); location.hash = '#limits'; });
