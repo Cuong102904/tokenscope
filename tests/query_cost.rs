@@ -444,3 +444,45 @@ fn totals_display_rule() {
         assert_eq!(tot.display(), want, "{tot:?}");
     }
 }
+
+#[test]
+fn by_account_sums_tokens_and_cost_per_account() {
+    let d = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        home: d.path().to_path_buf(),
+    };
+    let c = db::open(&paths.db()).unwrap();
+    let prices = PriceTable::load(&paths).unwrap();
+    // two accounts of one vendor, one priced, plus an unpriced row under the second
+    for (k, acct, model, input, out) in [
+        ("a", "acc1", FABLE, 1000, 2000),
+        ("b", "acc1", FABLE, 1000, 2000),
+        ("c", "acc2", FABLE, 10, 20),
+        ("d", "acc2", "no-such-model", 5, 6),
+    ] {
+        ins(
+            &c,
+            Ins {
+                out,
+                model,
+                ..base(k)
+            },
+            input,
+            100,
+        );
+        c.execute("UPDATE usage SET account=?1 WHERE msg_key=?2", [acct, k])
+            .unwrap();
+    }
+    let rows = cost::by_account(&c, &prices, &Filter::default()).unwrap();
+    let a1 = rows.iter().find(|r| r.account == "acc1").unwrap();
+    // tokens: input + output + cache_read + cache_write over both rows
+    assert_eq!(a1.tokens, 2 * (1000 + 2000 + 100));
+    // two identical priced rows, fully priced (cache reads included)
+    let want = prices.cost(FABLE, 2000, 4000, 200, 0, 0).unwrap();
+    assert!((a1.cost.unwrap() - want).abs() < 1e-9);
+    let a2 = rows.iter().find(|r| r.account == "acc2").unwrap();
+    assert_eq!(a2.tokens, (10 + 20 + 100) + (5 + 6 + 100));
+    assert!(a2.cost.is_none(), "one unpriced row: never a silent sum");
+    assert!(a2.priced_cost > 0.0);
+    assert_eq!(a1.vendor, "claude");
+}

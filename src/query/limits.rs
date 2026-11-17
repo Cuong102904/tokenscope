@@ -84,16 +84,31 @@ pub fn stale_after_secs(window_minutes: Option<i64>) -> i64 {
 pub const MAX_LABEL_CHARS: usize = 60;
 const LABEL_PREFIX: &str = "label:";
 
-/// Names set from the dashboard, keyed `<vendor>:<account>` (kv rows `label:<vendor>:<account>`).
+/// Names for accounts, keyed `<vendor>:<account>`: the ones set from the dashboard (kv rows
+/// `label:<vendor>:<account>`), and for accounts without one the email in the account registry
+/// (kv rows `account:<vendor>:<account>`, see `accounts`). A dashboard name always wins.
 pub fn stored_labels(conn: &Connection) -> anyhow::Result<HashMap<String, String>> {
     let mut st = conn.prepare("SELECT key, value FROM kv WHERE key LIKE 'label:%'")?;
     let rows = st
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows
+    let mut out: HashMap<String, String> = rows
         .into_iter()
         .filter_map(|(k, v)| Some((k.strip_prefix(LABEL_PREFIX)?.to_string(), v)))
-        .collect())
+        .collect();
+    let mut st = conn.prepare("SELECT key, value FROM kv WHERE key LIKE 'account:%'")?;
+    let regs = st
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (k, v) in regs {
+        let Some(key) = k.strip_prefix("account:") else {
+            continue;
+        };
+        if let Ok(info) = serde_json::from_str::<crate::accounts::AccountInfo>(&v) {
+            out.entry(key.to_string()).or_insert(info.email);
+        }
+    }
+    Ok(out)
 }
 
 /// Name an account from the dashboard. The name is trimmed; a blank one removes it. Accounts
@@ -130,7 +145,8 @@ pub fn set_label(
     Ok(())
 }
 
-/// Name shown for an account: `config.toml`, else the dashboard name, else `vendor:account`.
+/// Name shown for an account: `config.toml`, else the dashboard name, else the registry email,
+/// else `vendor:account`.
 /// The flag says whether the dashboard may rename it.
 pub fn account_label(
     cfg: &Config,
