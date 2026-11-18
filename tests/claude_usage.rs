@@ -341,6 +341,48 @@ fn switching_claude_account_adds_a_row_and_keeps_the_old_one() {
     );
 }
 
+const CLAUDE_JSON: &str = r#"{"oauthAccount":{"accountUuid":"u-1","emailAddress":"me@example.com","organizationUuid":"o-1","organizationName":"Acme"}}"#;
+
+#[test]
+fn refresh_uses_the_uuid_key_and_fills_the_registry() {
+    use tokenscope::accounts::{self, claude_key};
+    use tokenscope::model::Vendor;
+    let (h, paths, mut conn) = setup_home();
+    std::fs::write(paths.claude_json(), CLAUDE_JSON).unwrap();
+    // `claude auth status` says someone else: the uuid source must win
+    let bin = identity_claude(h.path(), &auth_json("other@example.com"));
+    locked_refresh(&paths, &Config::default(), &mut conn, &bin, 1000).unwrap();
+    let key = claude_key("u-1", Some("o-1"));
+    assert_eq!(accounts(&conn), std::slice::from_ref(&key));
+    let info = accounts::get(&conn, Vendor::Claude, &key).unwrap().unwrap();
+    assert_eq!(info.email, "me@example.com");
+    assert_eq!(claude_usage::identity_key(&conn), Some(key));
+}
+
+#[test]
+fn refresh_falls_back_to_the_email_key_without_claude_json() {
+    use tokenscope::model::sha8;
+    let (h, paths, mut conn) = setup_home();
+    let bin = identity_claude(h.path(), &auth_json("me@example.com"));
+    locked_refresh(&paths, &Config::default(), &mut conn, &bin, 1000).unwrap();
+    assert_eq!(accounts(&conn), [sha8("me@example.com")]);
+}
+
+#[test]
+fn old_email_keyed_rows_move_to_the_uuid_key() {
+    use tokenscope::accounts::claude_key;
+    use tokenscope::model::sha8;
+    let (h, paths, mut conn) = setup_home();
+    let bin = identity_claude(h.path(), &auth_json("me@example.com"));
+    // first run: no ~/.claude.json yet, readings land on sha8(email)
+    locked_refresh(&paths, &Config::default(), &mut conn, &bin, 1000).unwrap();
+    assert_eq!(accounts(&conn), [sha8("me@example.com")]);
+    // then the uuid becomes known
+    std::fs::write(paths.claude_json(), CLAUDE_JSON).unwrap();
+    locked_refresh(&paths, &Config::default(), &mut conn, &bin, 1400).unwrap();
+    assert_eq!(accounts(&conn), [claude_key("u-1", Some("o-1"))]);
+}
+
 #[test]
 fn an_account_chosen_in_config_is_left_alone() {
     let (h, paths, mut conn) = setup_home();

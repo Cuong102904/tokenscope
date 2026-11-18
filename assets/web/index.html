@@ -103,6 +103,9 @@
   .ltab .lv { font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .ltab .bar { height:6px; margin:4px 0; }
   .ltab.mini td { padding:6px 8px; }
+.ltab td.acc .lmeta { white-space:normal; overflow-wrap:anywhere; }
+.ltab td.used { white-space:nowrap; min-width:110px; }
+.ltab td.used .lv { font-weight:600; }
   .lv.ok { color:var(--ok); } .lv.mid { color:var(--amber); } .lv.hi { color:var(--bad); } .lv.old { color:var(--mute); }
   .bar i.old { background:var(--mute); opacity:.45; }
   .ltab td.st { font-weight:600; min-width:140px; }
@@ -136,6 +139,7 @@
   </header>
   <nav class="tabs" id="tabs">
     <a href="#overview" data-tab="overview">Overview</a>
+    <a href="#accounts" data-tab="accounts">Accounts</a>
     <a href="#limits" data-tab="limits">Limits</a>
     <a href="#cost" data-tab="cost">Cost</a>
     <a href="#sessions" data-tab="sessions">Sessions</a>
@@ -151,6 +155,12 @@
       <section class="card" data-sec="ov-daily"><h2>Daily cost by model <span class="t">30 days</span></h2>
         <div class="body"><div class="chart"><canvas id="cOvDaily" role="img" aria-label="Daily cost by model, last 30 days"></canvas></div></div></section>
       <section class="card" data-sec="ov-limits"><h2>Rate limits</h2><div class="body" id="ovLimits"></div></section>
+    </div>
+
+    <div data-pane="accounts" hidden>
+      <section class="card" data-sec="acc-table"><h2>Accounts <span class="t" id="accCount"></span></h2>
+        <div class="body scroll" id="accBody"></div>
+        <p class="note" id="accNote" hidden></p></section>
     </div>
 
     <div data-pane="cost" hidden>

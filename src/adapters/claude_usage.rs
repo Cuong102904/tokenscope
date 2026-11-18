@@ -15,8 +15,9 @@
 //! in the machine's time zone, which is the one Claude prints them in.
 //!
 //! Which account is signed in comes from `claude auth status --json` (email, organisation,
-//! plan; no token). Unless the user chose `claude_account` in `config.toml`, readings are keyed
-//! `sha8(email)` and the account is named by its email in the local database.
+//! plan; no token). Unless the user chose `claude_account` in `config.toml`, readings are keyed by
+//! the account uuid from `~/.claude.json` (`claude_identity`), else `sha8(email)` as before, and
+//! the account is named by its email in the local database.
 
 pub use super::refresh::RefreshOutcome;
 use super::refresh::{resolve, throttle};
@@ -96,6 +97,32 @@ fn identify(bin: &Path, dir: &Path) -> Option<Identity> {
     parse_auth_status(&String::from_utf8_lossy(&out))
 }
 
+/// The first time ever, move the readings recorded under the default key to `key` (until now
+/// there was only that one account).
+pub(super) fn adopt_default_rows(conn: &Connection, key: &str) -> anyhow::Result<()> {
+    use rusqlite::OptionalExtension;
+    let migrated: Option<String> = conn
+        .query_row(
+            "SELECT value FROM kv WHERE key = ?1",
+            [KV_IDENTITY_MIGRATED],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if migrated.is_none() {
+        for table in ["limit_snapshots", "limit_events"] {
+            conn.execute(
+                &format!("UPDATE OR IGNORE {table} SET account = ?1 WHERE vendor = 'claude' AND account = ?2"),
+                [key, DEFAULT_ACCOUNT],
+            )?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO kv(key,value) VALUES(?1,'1')",
+            [KV_IDENTITY_MIGRATED],
+        )?;
+    }
+    Ok(())
+}
+
 /// Remember the identified account: its key, a name (its email, unless the user already named
 /// it), and, the first time ever, move the readings recorded under the default key to it (until
 /// now there was only that one account).
@@ -113,24 +140,7 @@ fn remember_identity(conn: &Connection, id: &Identity) -> anyhow::Result<String>
             id.email.chars().take(MAX_LABEL_CHARS).collect::<String>(),
         ],
     )?;
-    let migrated: Option<String> = {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT value FROM kv WHERE key = ?1",
-            [KV_IDENTITY_MIGRATED],
-            |r| r.get(0),
-        )
-        .optional()?
-    };
-    if migrated.is_none() {
-        for table in ["limit_snapshots", "limit_events"] {
-            conn.execute(
-                &format!("UPDATE OR IGNORE {table} SET account = ?1 WHERE vendor = 'claude' AND account = ?2"),
-                [key.as_str(), DEFAULT_ACCOUNT],
-            )?;
-        }
-        set(KV_IDENTITY_MIGRATED, "1")?;
-    }
+    adopt_default_rows(conn, &key)?;
     Ok(key)
 }
 
@@ -290,11 +300,17 @@ pub fn refresh_with(
     let text = String::from_utf8_lossy(&out);
     // the user's own choice of account key wins; otherwise the signed-in account names it
     let account = if cfg.claude_account == DEFAULT_ACCOUNT {
-        match identify(&bin, &dir) {
-            Some(id) => remember_identity(conn, &id)?,
-            None => cfg.claude_account.clone(),
+        // the uuid in ~/.claude.json first (the key the transcripts use), else ask `claude`
+        match super::claude_identity::sync_signed_in(conn, paths, cfg, now)? {
+            Some(key) => key,
+            None => match identify(&bin, &dir) {
+                Some(id) => remember_identity(conn, &id)?,
+                None => cfg.claude_account.clone(),
+            },
         }
     } else {
+        // not the user's key, but the registry still learns who is signed in
+        super::claude_identity::sync_signed_in(conn, paths, cfg, now)?;
         cfg.claude_account.clone()
     };
     let snaps = parse_usage(&text, now, &account);

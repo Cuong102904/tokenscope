@@ -68,7 +68,8 @@ pub fn write_batch(conn: &mut Connection, b: &Batch) -> Result<()> {
                cache_read=excluded.cache_read, cache_write_5m=excluded.cache_write_5m,
                cache_write_1h=excluded.cache_write_1h, sidechain=excluded.sidechain,
                skill=excluded.skill, plugin=excluded.plugin
-             WHERE excluded.output > usage.output",
+             WHERE excluded.output > usage.output
+                OR (excluded.output = usage.output AND excluded.account <> usage.account)",
         )?;
         for r in &b.usage {
             u.execute(params![

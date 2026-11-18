@@ -59,6 +59,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/skills", get(skills_api))
         .route("/api/active", get(active_api))
         .route("/api/meta", get(meta))
+        .route("/api/accounts", get(accounts_api))
         .route("/api/limits", get(limits_api))
         .route("/api/limits/history", get(limits_history_api))
         .route("/api/account-label", post(account_label_api))
@@ -327,6 +328,19 @@ async fn meta(State(st): State<AppState>) -> ApiResult {
 }
 
 /// Limit-reached events shown in the limits tab cover this many days.
+/// `{ accounts }`: one row per account (name, signed-in marker, quota left per window, tokens and
+/// cost over the range). `days` and `vendor` apply; the model and project filters do too.
+async fn accounts_api(State(st): State<AppState>, Query(p): Query<Params>) -> ApiResult {
+    let f = p.filter()?;
+    with_db(st, move |c, st| {
+        let now = chrono::Utc::now().timestamp();
+        Ok(serde_json::json!({
+            "accounts": crate::query::accounts::overview(c, &st.cfg, &st.prices, &f, now)?,
+        }))
+    })
+    .await
+}
+
 const LIMIT_EVENT_DAYS: i64 = 30;
 /// `refresh=agy` runs a process and writes the DB, so it needs this header:
 /// a cross-site `<img>`/form cannot set it, and without CORS a script cannot either.

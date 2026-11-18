@@ -1,5 +1,6 @@
 pub mod agy;
 pub mod claude;
+pub mod claude_identity;
 pub mod claude_snapshots;
 pub mod claude_usage;
 pub mod codex;

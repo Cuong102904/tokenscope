@@ -609,3 +609,60 @@ async fn account_label_can_be_set_from_the_dashboard() {
             .any(|c| c["account_label"] == "codex:aaaa1111")
     );
 }
+
+#[tokio::test]
+async fn api_accounts_returns_rows_and_never_the_raw_key_as_label() {
+    use tokenscope::accounts::{self, AccountInfo};
+    use tokenscope::model::Vendor;
+    let (_d, st) = setup();
+    {
+        let c = db::open(&st.paths.db()).unwrap();
+        c.execute(
+            "UPDATE usage SET account='ab12cd34' WHERE vendor='claude'",
+            [],
+        )
+        .unwrap();
+        let info = AccountInfo {
+            email: "me@example.com".into(),
+            org: Some("Acme".into()),
+            plan: None,
+            last_seen: 1,
+        };
+        accounts::upsert(&c, Vendor::Claude, "ab12cd34", &info).unwrap();
+    }
+    let v = json(&st, "/api/accounts?days=30").await;
+    let rows = v["accounts"].as_array().unwrap();
+    let a = rows
+        .iter()
+        .find(|r| r["account"] == "ab12cd34")
+        .unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(a["label"], "me@example.com");
+    assert_eq!(a["email"], "me@example.com");
+    assert_eq!(a["tokens"], 6000);
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r["label"] == "ab12cd34" || r["label"] == "claude:ab12cd34"),
+        "{v}"
+    );
+    // the vendor filter applies
+    let v = json(&st, "/api/accounts?days=30&vendor=codex").await;
+    assert!(
+        v["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["vendor"] == "codex")
+    );
+}
+
+#[tokio::test]
+async fn dashboard_html_has_the_accounts_tab() {
+    let (_d, st) = setup();
+    let (s, html) = get(&st, "/").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(html.contains(r##"<a href="#accounts" data-tab="accounts">"##));
+    assert!(html.contains(r#"data-pane="accounts""#));
+    let (_, js) = get(&st, "/app.js").await;
+    assert!(js.contains("renderAccounts") && js.contains("'/api/accounts?'"));
+}

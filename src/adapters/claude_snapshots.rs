@@ -63,6 +63,8 @@ impl Adapter for ClaudeSnapshotsAdapter {
         let mut batch = Batch::default();
         // the status line cannot ask who is signed in; /usage did, so default-keyed snapshots
         // belong to that account
+        let now = chrono::Utc::now().timestamp();
+        let _ = super::claude_identity::sync_signed_in(ctx.conn, ctx.paths, ctx.config, now);
         let identified = super::claude_usage::identity_key(ctx.conn);
         for p in files(ctx.paths) {
             // a forbidden link target counts as unreadable; removing the link never touches it

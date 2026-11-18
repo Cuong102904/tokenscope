@@ -54,6 +54,10 @@ impl Paths {
     pub fn config(&self) -> PathBuf {
         self.data_dir().join("config.toml")
     }
+    /// Claude Code's global state. Only the `oauthAccount` metadata is read from it (never a token).
+    pub fn claude_json(&self) -> PathBuf {
+        self.home.join(".claude.json")
+    }
     pub fn claude_projects(&self) -> PathBuf {
         self.home.join(".claude/projects")
     }

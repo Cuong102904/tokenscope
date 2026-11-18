@@ -869,3 +869,39 @@ fn newest_reading_of_each_vendor_is_the_current_account() {
         "the placeholder is never current"
     );
 }
+
+#[test]
+fn account_label_prefers_dashboard_name_over_email() {
+    use tokenscope::accounts::{self, AccountInfo};
+    use tokenscope::model::Vendor;
+    let (_d, c) = setup();
+    for acct in ["aaaa1111", "bbbb2222"] {
+        snap(
+            &c,
+            "claude",
+            acct,
+            "five_hour",
+            300,
+            10.0,
+            NOW + HOUR,
+            NOW - MIN,
+        );
+        let info = AccountInfo {
+            email: format!("{acct}@example.com"),
+            org: None,
+            plan: None,
+            last_seen: NOW,
+        };
+        accounts::upsert(&c, Vendor::Claude, acct, &info).unwrap();
+    }
+    limits::set_label(&c, "claude", "aaaa1111", "Work").unwrap();
+    let cards = limits::current(&c, &Config::default(), NOW).unwrap();
+    assert_eq!(
+        card(&cards, "claude", "aaaa1111", "five_hour").account_label,
+        "Work"
+    );
+    assert_eq!(
+        card(&cards, "claude", "bbbb2222", "five_hour").account_label,
+        "bbbb2222@example.com"
+    );
+}

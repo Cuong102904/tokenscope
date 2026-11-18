@@ -382,6 +382,48 @@ pub fn by_vendor(
     Ok(v)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountUse {
+    pub vendor: String,
+    /// Raw account key (internal; never shown as a name).
+    pub account: String,
+    /// input + output + cache reads + cache writes of every row of the account.
+    pub tokens: u64,
+    /// `None` when any model of the account has no price.
+    pub cost: Option<f64>,
+    /// Priced part only; with `cost: None` it is a lower bound ("at least").
+    pub priced_cost: f64,
+}
+
+/// Usage per `(vendor, account)`, sorted by `priced_cost` descending.
+pub fn by_account(
+    conn: &Connection,
+    prices: &PriceTable,
+    f: &Filter,
+) -> anyhow::Result<Vec<AccountUse>> {
+    let mut m: BTreeMap<(String, String), (Acc, u64)> = BTreeMap::new();
+    for r in load(conn, prices, f)? {
+        let e = m.entry((r.vendor, r.account)).or_default();
+        e.0.add(r.cost);
+        e.1 += r.input + r.output + r.cache_read + r.cache_write;
+    }
+    let mut v: Vec<AccountUse> = m
+        .into_iter()
+        .map(|((vendor, account), (acc, tokens))| AccountUse {
+            vendor,
+            account,
+            tokens,
+            cost: acc.cost(),
+            priced_cost: acc.priced,
+        })
+        .collect();
+    v.sort_by(|a, b| {
+        by_priced_desc(a.priced_cost, b.priced_cost)
+            .then_with(|| (&a.vendor, &a.account).cmp(&(&b.vendor, &b.account)))
+    });
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -29,10 +29,11 @@ Each vendor shows part of this in a different place, or not at all. tokenscope p
 - **Five agents, one view.** Supports Claude Code, Codex CLI, OpenCode, Pi and Antigravity. Multiple accounts per vendor are kept apart.
 - **Estimated cost.** Prices come from a built-in table of API list prices (`assets/pricing.toml`) and are computed at query time, so a price update applies to history too. When a model has no known price, totals say `≥ $X` or `n/a` instead of showing a silent `$0`.
 - **Rate limits.** Shows 5-hour and weekly usage %, reset times and a projected time-to-limit. Old readings are marked stale instead of being shown as current.
-- **Web dashboard** with six tabs: Overview, Limits, Cost, Sessions, Skills & tools, Active. It has a light/dark theme switch (Auto follows your system) that is remembered per browser.
+- **Accounts tab.** One row per account (by its email): signed in or not, quota left in each window, and the tokens and cost it used over the selected range.
+- **Web dashboard** with seven tabs: Overview, Accounts, Limits, Cost, Sessions, Skills & tools, Active. It has a light/dark theme switch (Auto follows your system) that is remembered per browser.
 - **Terminal UI** for a quick look without a browser.
 - **Claude Code status line** that adds a line like `5h 44% · week 54% · $12.00 today` under your existing status line.
-- **Privacy.** Account IDs are stored only as short hashes. Credential files are never opened. The web server binds to `127.0.0.1` only and rejects foreign `Host` headers.
+- **Privacy.** Account keys are short hashes that are never shown; the signed-in Claude account's email is kept in your local database to name it, and never leaves your machine. Credential files are never opened. The web server binds to `127.0.0.1` only and rejects foreign `Host` headers.
 - **Single binary.** Data lives in SQLite (bundled) and the web assets are embedded. There is no runtime to install.
 
 ## Supported platforms
@@ -126,7 +127,18 @@ Limits are shown one row per account, with a status column ("Available", "Limit 
 
 **Several Codex accounts.** Codex can only report the account that is logged in. If you switch accounts with another tool (for example [codex-multi-auth](https://www.npmjs.com/package/codex-multi-auth)) or with `codex login`, tokenscope notices within one collect interval and asks for the new account's limits right away. It does this by watching the modification time, size and inode of `~/.codex/auth.json`; the file itself is never opened. Each account you switch to gets its own row, showing the numbers from the last time it was logged in. tokenscope does not switch accounts itself.
 
-**Naming accounts.** Accounts show as `codex:f8ce04de` (a short hash). Click the pencil next to a name on the Limits tab to give it a readable one (a work email, "personal", …); a blank name removes it. Names are kept in the local database. With more than one account for a vendor, the one with the newest reading is marked **Current**: that is the account that is logged in. Names set in `[labels]` of `config.toml` take precedence and cannot be changed from the dashboard.
+**Naming accounts.** Accounts without a known email show as `codex:f8ce04de` (a short hash). Click the pencil next to a name on the Limits tab to give it a readable one (a work email, "personal", …); a blank name removes it. Names are kept in the local database. With more than one account for a vendor, the one with the newest reading is marked **Current**: that is the account that is logged in. Names set in `[labels]` of `config.toml` take precedence and cannot be changed from the dashboard.
+
+## Accounts
+
+The **Accounts** tab lists every account tokenscope has seen, one row each: its name, a **signed in** marker, the quota left in each window (with the reset time) and the tokens and cost it used over the selected time range.
+
+- **Usage per account needs no extra tool.** Claude Code writes a `session-owner` line (account and organisation ids) into every transcript, and tokenscope files the session's usage under that account. The same account id is read from the `oauthAccount` metadata in `~/.claude.json` (no token is read) for the signed-in account, so its usage and its limit readings land on one row. The same email in two organisations stays two accounts.
+- **Names.** A name you gave on the Limits tab wins; otherwise the email tokenscope saw for that account. Usage from sessions that predate the `session-owner` line has no account and shows as one **unknown account**; tokenscope does not guess it from timing.
+- **Quota of an account that is not signed in.** Claude and Codex only report the signed-in account, so the others show the last reading taken while they were signed in, marked with its age.
+- Sessions started with a separate history (for example `--no-share-history` in a multi-account tool) keep their transcripts elsewhere, where tokenscope does not look.
+
+tokenscope does not log accounts in, switch them, or touch credentials.
 
 ## Claude Code rate limits
 

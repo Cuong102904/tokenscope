@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"sPar","cwd":"/home/u/proj","isSidechain":true,"requestId":"r_sub","timestamp":"2026-11-05T03:30:00.000Z","message":{"id":"m_sub","model":"claude-sonnet-4-5","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[]}}

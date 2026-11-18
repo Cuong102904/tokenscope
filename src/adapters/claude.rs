@@ -1,9 +1,11 @@
 use super::{Adapter, CollectCtx, Discovery};
+use crate::accounts::claude_key;
 use crate::model::*;
 use crate::paths::Paths;
 use crate::scan;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct ClaudeAdapter;
 
@@ -19,6 +21,47 @@ fn ts_of(v: &Value) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(v["timestamp"].as_str()?)
         .ok()
         .map(|d| d.timestamp())
+}
+
+const KV_OWNER_SCAN: &str = "claude:owner_scan_v1";
+
+/// `(accountUuid, organizationUuid)` of a `session-owner` line. The uuid must be a non-empty
+/// string; the organisation is optional.
+pub fn parse_owner(v: &Value) -> Option<(String, Option<String>)> {
+    if v["type"] != "session-owner" {
+        return None;
+    }
+    Some((s(&v["accountUuid"])?, s(&v["organizationUuid"])))
+}
+
+/// The account key of the session a transcript belongs to: its own `session-owner` line (not
+/// necessarily the first), else, for a subagent file, the owner of the parent session file
+/// `<dir>/<sessionId>.jsonl`. `None` for sessions that predate the line.
+fn owner_of_file(
+    path: &Path,
+    lines: &[Value],
+    parents: &mut HashMap<PathBuf, Option<String>>,
+) -> Option<String> {
+    let key_of = |lines: &[Value]| {
+        lines
+            .iter()
+            .find_map(parse_owner)
+            .map(|(u, o)| claude_key(&u, o.as_deref()))
+    };
+    if let Some(k) = key_of(lines) {
+        return Some(k);
+    }
+    // .../<sessionId>/subagents/agent-x.jsonl -> .../<sessionId>.jsonl
+    let mut dir = path.parent()?;
+    while dir.file_name().is_some_and(|n| n != "subagents") {
+        dir = dir.parent()?;
+    }
+    let session_dir = dir.parent()?;
+    let parent = session_dir.with_extension("jsonl");
+    parents
+        .entry(parent.clone())
+        .or_insert_with(|| scan::read_jsonl(&parent).ok().and_then(|l| key_of(&l)))
+        .clone()
 }
 
 /// Turn one transcript line into batch entries (usage, tools, skills, limit events).
@@ -145,8 +188,31 @@ impl Adapter for ClaudeAdapter {
     }
 
     fn collect(&self, ctx: &mut CollectCtx) -> anyhow::Result<Batch> {
-        let account = ctx.config.claude_account.clone();
+        let fallback = ctx.config.claude_account.clone();
         let mut batch = Batch::default();
+        let mut parents: HashMap<PathBuf, Option<String>> = HashMap::new();
+        // Rows written before attribution sit under the configured account and their files are
+        // marked done: forget the stamps once so every transcript is read again. The marker is
+        // saved with the batch, so a failed write retries.
+        let root = ctx.paths.claude_projects();
+        let owner_scan_done: Option<String> = {
+            use rusqlite::OptionalExtension;
+            ctx.conn
+                .query_row(
+                    "SELECT value FROM kv WHERE key = ?1",
+                    [KV_OWNER_SCAN],
+                    |r| r.get(0),
+                )
+                .optional()?
+        };
+        if owner_scan_done.is_none() {
+            let prefix = format!("{}/", root.to_string_lossy());
+            ctx.conn.execute(
+                "DELETE FROM files WHERE substr(path, 1, ?1) = ?2",
+                rusqlite::params![prefix.chars().count() as i64, prefix],
+            )?;
+            batch.kv.push((KV_OWNER_SCAN.to_string(), "1".to_string()));
+        }
         let mut sessions: HashMap<String, SessionInfo> = HashMap::new();
         for stamp in scan::changed_files(ctx.conn, &ctx.paths.claude_projects(), "jsonl")? {
             let lines = match scan::read_jsonl(&stamp.path) {
@@ -156,6 +222,8 @@ impl Adapter for ClaudeAdapter {
                     continue;
                 }
             };
+            let account = owner_of_file(&stamp.path, &lines, &mut parents)
+                .unwrap_or_else(|| fallback.clone());
             let mut project = String::new();
             let mut session_id = String::new();
             for v in &lines {
